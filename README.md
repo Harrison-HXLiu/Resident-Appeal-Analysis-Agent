@@ -63,7 +63,7 @@ cloudflared tunnel --url http://localhost:8000
 编辑 `.env`：
 
 ```dotenv
-DEEPSEEK_API_KEY=sk-0d86b4b548e049ca804ca7c3fcf93deb
+DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 ```
