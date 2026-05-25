@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}报告生成 - {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero compact">
+    <div>
+        <p class="eyebrow">REPORT STUDIO</p>
+        <h1>分析报告生成</h1>
+        <p class="muted">基于指定地区与时间范围生成报告；只有导入数据覆盖的地区可选。</p>
+    </div>
+    <form class="filters report-form" method="post">
+        <label>地区
+            <select name="region_id" required>
+                {% for region in regions %}
+                <option value="{{ region.id }}">{{ region.province }} {{ region.city }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>起始日期<input type="date" name="start"></label>
+        <label>结束日期<input type="date" name="end"></label>
+        <button type="submit">生成报告</button>
+    </form>
+</section>
+<section class="report-layout">
+    <aside class="panel report-list">
+        <h2>历史报告</h2>
+        {% for item in reports %}
+        <a href="/reports?selected={{ item.id }}" class="{% if report and item.id == report.id %}selected{% endif %}">
+            <strong>{{ item.title }}</strong>
+            <small>{{ item.created_at.strftime("%Y-%m-%d %H:%M") }} · {{ item.generated_by }}</small>
+        </a>
+        {% else %}
+        <p class="muted">尚未生成报告。</p>
+        {% endfor %}
+    </aside>
+    <article class="panel report-view">
+        {% if report %}
+        <div class="panel-heading">
+            <h2>{{ report.title }}</h2>
+            <a class="button secondary" href="/reports/{{ report.id }}/download">下载 Markdown</a>
+        </div>
+        <pre>{{ report.content }}</pre>
+        {% else %}
+        <div class="empty">选择范围并生成第一份报告。</div>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}
+

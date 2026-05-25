@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}智能问答 - {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero compact">
+    <div>
+        <p class="eyebrow">ANALYST AGENT</p>
+        <h1>向数据提问</h1>
+        <p class="muted">回答会注明数据范围。未配置 DeepSeek 时仍可返回基础统计事实。</p>
+    </div>
+</section>
+<section class="chat-layout">
+    <form class="panel query-form" method="post">
+        <label>问题
+            <textarea name="question" rows="5" required placeholder="例如：苏州民众投诉最多的方面是什么？">{{ question }}</textarea>
+        </label>
+        <div class="inline-fields">
+            <label>城市
+                <select name="city">
+                    {% for region in regions %}
+                    <option value="{{ region.city }}" {% if selected_city == region.city %}selected{% endif %}>{{ region.city }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>起始日期<input type="date" name="start" value="{{ start or '' }}"></label>
+            <label>结束日期<input type="date" name="end" value="{{ end or '' }}"></label>
+        </div>
+        <button type="submit">开始分析</button>
+        <div class="examples">
+            <span>示例问题</span>
+            <p>苏州民众反映最多的主题是什么？回复办理情况如何？</p>
+            <p>2025 年留言热点有哪些？请简要总结。</p>
+        </div>
+    </form>
+    <article class="panel answer">
+        <h2>分析结果</h2>
+        {% if answer %}
+        <p class="source">生成来源：{{ answer_source }}</p>
+        <pre>{{ answer }}</pre>
+        {% else %}
+        <div class="empty">填写问题后，结果将在此显示。</div>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}
+

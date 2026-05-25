@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}数据概览 - {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">DATA OVERVIEW</p>
+        <h1>居民留言概览</h1>
+        <p class="muted">所有统计基于已导入记录；主题分布在 AI 复核前为关键词规则初标。</p>
+    </div>
+    <form class="filters" method="get">
+        <label>城市
+            <select name="city">
+                {% for region in regions %}
+                <option value="{{ region.city }}" {% if selected_city == region.city %}selected{% endif %}>{{ region.province }} {{ region.city }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>起始日期<input type="date" name="start" value="{{ start }}"></label>
+        <label>结束日期<input type="date" name="end" value="{{ end }}"></label>
+        <button type="submit">更新统计</button>
+    </form>
+</section>
+
+<section class="cards">
+    <article><span>留言总量</span><strong>{{ "{:,}".format(stats.total) }}</strong></article>
+    <article><span>已回复</span><strong>{{ "{:,}".format(stats.responded) }}</strong></article>
+    <article><span>回复率</span><strong>{{ stats.response_rate }}%</strong></article>
+    <article><span>平均回复耗时</span><strong>{{ stats.average_response_hours or "-" }}<small> 小时</small></strong></article>
+    <article><span>待完整回复</span><strong>{{ stats.pending }}</strong></article>
+</section>
+
+<section class="chart-grid">
+    <article class="panel wide">
+        <h2>留言趋势</h2>
+        <div id="monthly-chart" class="chart"></div>
+    </article>
+    <article class="panel">
+        <h2>热点主题</h2>
+        <div id="topic-chart" class="chart"></div>
+    </article>
+    <article class="panel">
+        <h2>回复部门 TOP 10</h2>
+        <div id="department-chart" class="chart"></div>
+    </article>
+</section>
+
+<section class="panel notes">
+    <h2>分析口径</h2>
+    <p>当前覆盖 {{ selected_city }}，记录日期范围：
+        {% if stats.earliest %}{{ stats.earliest.strftime("%Y-%m-%d") }} 至 {{ stats.latest.strftime("%Y-%m-%d") }}{% else %}暂无数据{% endif %}。
+        已标注 {{ stats.annotated }} 条，标签来源：{{ stats.topic_sources }}。
+    </p>
+</section>
+<script>
+const stats = {{ stats_json | safe }};
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, char => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[char]));
+}
+function renderBars(targetId, rows, className) {
+    const target = document.getElementById(targetId);
+    const max = Math.max(...rows.map(row => row.count), 1);
+    target.innerHTML = `<div class="bar-list ${className}">` + rows.map(row => `
+        <div class="bar-row">
+            <span title="${escapeHtml(row.name)}">${escapeHtml(row.name)}</span>
+            <div><i style="width:${(row.count / max * 100).toFixed(1)}%"></i></div>
+            <strong>${row.count.toLocaleString()}</strong>
+        </div>`).join("") + "</div>";
+}
+function renderTrend(targetId, rows) {
+    const target = document.getElementById(targetId);
+    const max = Math.max(...rows.map(row => row.count), 1);
+    target.innerHTML = `<div class="trend-bars">` + rows.map((row, index) => `
+        <div class="trend-col" title="${escapeHtml(row.month)}：${row.count.toLocaleString()} 件">
+            <strong>${row.count.toLocaleString()}</strong>
+            <i style="height:${Math.max(row.count / max * 155, 3).toFixed(1)}px"></i>
+            <span>${index % 3 === 0 || index === rows.length - 1 ? escapeHtml(row.month) : ""}</span>
+        </div>`).join("") + "</div>";
+}
+renderTrend("monthly-chart", stats.monthly);
+renderBars("topic-chart", stats.topics.slice(0, 8), "accent");
+renderBars("department-chart", stats.departments.slice(0, 10), "");
+</script>
+{% endblock %}
