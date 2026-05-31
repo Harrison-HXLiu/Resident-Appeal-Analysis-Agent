@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -125,6 +125,68 @@ class ChatMessage(Base):
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 
 
+class AppealChunk(Base):
+    __tablename__ = "appeal_chunks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    appeal_id: Mapped[int] = mapped_column(ForeignKey("appeals.id"), unique=True, index=True)
+    search_text: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    content_excerpt: Mapped[str] = mapped_column(Text)
+    reply_excerpt: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    appeal: Mapped[Appeal] = relationship()
+
+
+class RetrievalLog(Base):
+    __tablename__ = "retrieval_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    city: Mapped[str] = mapped_column(String(60), default="")
+    start_date: Mapped[str] = mapped_column(String(20), default="")
+    end_date: Mapped[str] = mapped_column(String(20), default="")
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    selected_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RagAnswerSource(Base):
+    __tablename__ = "rag_answer_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    retrieval_log_id: Mapped[int] = mapped_column(ForeignKey("retrieval_logs.id"), index=True)
+    appeal_id: Mapped[int] = mapped_column(ForeignKey("appeals.id"), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    reason: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    appeal: Mapped[Appeal] = relationship()
+    retrieval_log: Mapped[RetrievalLog] = relationship()
+
+
+class AppealEmbedding(Base):
+    __tablename__ = "appeal_embeddings"
+    __table_args__ = (UniqueConstraint("chunk_id", "model_name", name="uq_embedding_chunk_model"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chunk_id: Mapped[int] = mapped_column(ForeignKey("appeal_chunks.id"), index=True)
+    appeal_id: Mapped[int] = mapped_column(ForeignKey("appeals.id"), index=True)
+    model_name: Mapped[str] = mapped_column(String(120), index=True)
+    text_hash: Mapped[str] = mapped_column(String(64), index=True)
+    vector_dim: Mapped[int] = mapped_column(Integer)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    chunk: Mapped[AppealChunk] = relationship()
+    appeal: Mapped[Appeal] = relationship()
+
+
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
 
@@ -137,4 +199,3 @@ class AnalysisJob(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-

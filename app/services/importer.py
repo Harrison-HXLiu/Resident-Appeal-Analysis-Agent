@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models import Appeal, AppealAnnotation, ImportBatch, Region
 from app.services.classification import classify_by_rule
 from app.services.privacy import redact_text
+from app.services.rag import upsert_chunk_for_appeal
 
 
 REQUIRED_COLUMNS = ["来件时间", "回复时间", "来件类型", "来件标题", "来件内容", "回复部门", "回复内容"]
@@ -159,6 +160,7 @@ def import_excel(
         appeal.redacted_content = redact_text(appeal.content)
         appeal.redacted_reply = redact_text(appeal.reply_content) or None
         _set_rule_annotation(appeal)
+        upsert_chunk_for_appeal(session, appeal)
 
     batch.inserted_count = inserted
     batch.updated_count = updated

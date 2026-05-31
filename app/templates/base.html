@@ -27,6 +27,9 @@
             <div class="model-state {% if llm_enabled %}online{% endif %}">
                 {% if llm_enabled %}AI 已启用 · {{ model_name }}{% else %}本地统计模式{% endif %}
             </div>
+            <div class="model-state {% if embedding_enabled %}online{% endif %}">
+                {% if embedding_enabled %}Embedding · {{ embedding_model }}{% else %}未启用向量检索{% endif %}
+            </div>
             <img class="institute-logo" src="{{ url_for('static', path='/logo.png') }}" alt="中国社会科学院数量经济与技术经济研究所">
         </div>
     </header>

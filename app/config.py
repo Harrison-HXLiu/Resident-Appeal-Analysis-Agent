@@ -20,7 +20,7 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    app_name: str = "居民留言分析 Agent"
+    app_name: str = "居民政策诉求监测分析大模型"
     base_dir: Path = BASE_DIR
     database_url: str = os.getenv(
         "DATABASE_URL", f"sqlite:///{(BASE_DIR / 'instance' / 'appeals.db').as_posix()}"
@@ -30,6 +30,10 @@ class Settings:
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
+    embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
+    embedding_top_k: int = int(os.getenv("EMBEDDING_TOP_K", "40"))
     default_province: str = os.getenv("DEFAULT_PROVINCE", "江苏省")
     default_city: str = os.getenv("DEFAULT_CITY", "苏州市")
     auto_import_sample: bool = _as_bool(os.getenv("AUTO_IMPORT_SAMPLE"), True)
@@ -46,4 +50,3 @@ def get_settings() -> Settings:
     settings = Settings()
     settings.prepare_directories()
     return settings
-

@@ -35,11 +35,33 @@
         <h2>分析结果</h2>
         {% if answer %}
         <p class="source">生成来源：{{ answer_source }}</p>
-        <pre>{{ answer }}</pre>
+        <article class="markdown-answer">{{ answer_html | safe }}</article>
+        {% if rag_evidence %}
+        <section class="rag-sources">
+            <h3>检索依据</h3>
+            <p class="source">
+                匹配候选 {{ rag_evidence.candidate_count }} 条，
+                语义候选 {{ rag_evidence.embedding_candidate_count }} 条，
+                过滤后高相关 {{ rag_evidence.relevant_count }} 条，
+                送入模型 {{ rag_evidence.selected_sources|length }} 条代表案例。
+            </p>
+            {% for item in rag_evidence.selected_sources %}
+            <details class="source-card" {% if loop.index <= 3 %}open{% endif %}>
+                <summary>
+                    <strong>[{{ item.rank }}] {{ item.title }}</strong>
+                    <span>{{ item.received_at }} · {{ item.topic }} · {{ item.department }}</span>
+                </summary>
+                <p><b>信件编号：</b>{{ item.external_id }}</p>
+                <p><b>命中字段：</b>{{ item.matched_fields|join("、") if item.matched_fields else "综合相关" }}</p>
+                <p><b>来件摘要：</b>{{ item.content_excerpt }}</p>
+                <p><b>回复摘要：</b>{{ item.reply_excerpt or "暂无回复摘要" }}</p>
+            </details>
+            {% endfor %}
+        </section>
+        {% endif %}
         {% else %}
         <div class="empty">填写问题后，结果将在此显示。</div>
         {% endif %}
     </article>
 </section>
 {% endblock %}
-

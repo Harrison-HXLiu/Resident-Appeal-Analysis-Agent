@@ -2,10 +2,14 @@
 
 这是一个面向政府平台居民留言的分析 demo。当前数据源为 `data/苏州.xlsx`，应用首次启动时会自动导入该文件，并为每条留言生成可解释的初始主题标签。
 
+完整工程原理、文件结构、算法架构和扩展路线见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+
 ## 已实现功能
 
 - 数据概览：留言量、回复率、平均回复耗时、趋势、热点主题和部门排行。
 - 智能问答：以数据库统计为依据回答问题；配置 DeepSeek 后生成自然语言研判回答。
+- RAG 检索增强：问答时会从留言标题、内容和回复中检索相关案例，并把代表性证据提供给模型。
+- 可选 Embedding 语义检索：支持 DashScope `text-embedding-v3`，与 SQLite FTS5 融合排序。
 - 报告生成：按地区和时间生成 Markdown 分析报告并下载。
 - 数据管理：上传新增城市 Excel，记录导入批次，按批运行 DeepSeek 主题复核。
 - 隐私处理：手机号、电话、身份证号、邮箱和显式地址在送往模型前脱敏。
@@ -19,6 +23,8 @@ Browser
   -> FastAPI + Jinja2 + Plotly
       -> SQLite + SQLAlchemy
       -> Excel import / redaction / rule annotation
+      -> SQLite FTS5 RAG retrieval
+      -> Optional DashScope embedding retrieval
       -> DeepSeek API (Q&A, report writing, topic refinement)
 ```
 
@@ -70,6 +76,31 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 
 API key 只在后端读取，不会下发给浏览器。未配置 API key 时，仪表盘、导入、规则主题分析、本地问答摘要和模板报告仍可使用。
 
+## 配置 Embedding 语义检索
+
+编辑 `.env`，填写阿里 DashScope key：
+
+```dotenv
+DASHSCOPE_API_KEY=你的_dashscope_key
+EMBEDDING_MODEL=text-embedding-v3
+EMBEDDING_BATCH_SIZE=10
+EMBEDDING_TOP_K=40
+```
+
+安装依赖后，先小批量测试：
+
+```powershell
+python -m app.cli build-embeddings --limit 20
+```
+
+确认无误后全量构建：
+
+```powershell
+python -m app.cli build-embeddings
+```
+
+完成后，智能问答会使用“关键词候选 + 语义候选”的混合检索。若未配置 `DASHSCOPE_API_KEY` 或未构建向量索引，系统会自动退回 SQLite FTS5，不影响原有问答。
+
 截至 2026-05-25，DeepSeek 官方 API 使用 OpenAI 兼容调用方式，默认模型在本项目中配置为 `deepseek-v4-flash`；模型名称保存在环境变量中，便于后续随官方版本变化调整。
 
 ## 数据格式
@@ -92,11 +123,30 @@ API key 只在后端读取，不会下发给浏览器。未配置 API key 时，
 python -m app.cli import .\data\苏州.xlsx --province 江苏省 --city 苏州市
 ```
 
+重建 RAG 检索索引：
+
+```powershell
+python -m app.cli rebuild-rag
+```
+
 运行测试：
 
 ```powershell
 pytest
 ```
+
+## RAG 问答流程
+
+智能问答现在采用“统计摘要 + 检索证据 + 模型生成”的流程：
+
+1. 系统根据用户问题、城市和时间条件筛选数据。
+2. 使用 SQLite FTS5 从脱敏后的标题、来件内容、回复内容、部门和主题中召回关键词候选。
+3. 若已构建 embedding 索引，使用 DashScope 从同一批 chunk 中召回语义候选。
+4. 融合关键词排序和语义相似度，选择多样化代表案例，避免全部来自同一主题或同一部门。
+5. 将统计摘要和代表案例交给 DeepSeek 生成回答。
+6. 页面下方展示关键词候选数、语义候选数、高相关数、送入模型的案例数和来源摘要。
+
+未配置 DeepSeek 时，系统仍会显示统计摘要和检索到的代表案例。当前第一版 RAG 使用 SQLite FTS5 与短词回退检索，暂未引入向量数据库；后续可以新增 embedding 表和混合排序。
 
 ## 生产化注意事项
 

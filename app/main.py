@@ -21,6 +21,8 @@ from app.services.agent import ask_question
 from app.services.ai_annotation import refine_annotations_with_ai
 from app.services.analytics import available_regions, clear_dashboard_cache, dashboard_stats
 from app.services.importer import backfill_rule_annotations, import_excel
+from app.services.markdown import render_markdown
+from app.services.rag import backfill_chunks, ensure_fts_index, rebuild_fts_index
 from app.services.reports import create_report
 
 
@@ -38,11 +40,13 @@ def _import_sample_if_empty() -> None:
                 import_excel(session, samples[0], settings.default_province, settings.default_city)
         else:
             backfill_rule_annotations(session)
+        backfill_chunks(session)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_database()
+    ensure_fts_index()
     _import_sample_if_empty()
     yield
 
@@ -58,6 +62,8 @@ def _base_context(request: Request, session: Session) -> dict[str, object]:
         "regions": available_regions(session),
         "llm_enabled": bool(settings.deepseek_api_key.strip()),
         "model_name": settings.deepseek_model,
+        "embedding_enabled": bool(settings.dashscope_api_key.strip()),
+        "embedding_model": settings.embedding_model,
     }
 
 
@@ -116,7 +122,16 @@ def dashboard_api(
 @app.get("/ask", response_class=HTMLResponse)
 def ask_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     context = _base_context(request, session)
-    context.update({"question": "", "answer": None, "answer_source": None, "selected_city": settings.default_city})
+    context.update(
+        {
+            "question": "",
+            "answer": None,
+            "answer_html": None,
+            "answer_source": None,
+            "rag_evidence": None,
+            "selected_city": settings.default_city,
+        }
+    )
     return templates.TemplateResponse(request=request, name="ask.html", context=context)
 
 
@@ -129,7 +144,7 @@ def ask_submit(
     end: str = Form(""),
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
-    answer, answer_source = ask_question(
+    answer, answer_source, rag_evidence = ask_question(
         session, question, city=city or None, start=start or None, end=end or None
     )
     chat = ChatSession(title=question[:80])
@@ -143,7 +158,9 @@ def ask_submit(
         {
             "question": question,
             "answer": answer,
+            "answer_html": render_markdown(answer),
             "answer_source": answer_source,
+            "rag_evidence": rag_evidence,
             "selected_city": city,
             "start": start,
             "end": end,
@@ -227,6 +244,8 @@ def upload_data(
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     clear_dashboard_cache()
+    backfill_chunks(session)
+    rebuild_fts_index()
     message = (
         "该文件此前已导入，未重复写入。"
         if result.skipped
