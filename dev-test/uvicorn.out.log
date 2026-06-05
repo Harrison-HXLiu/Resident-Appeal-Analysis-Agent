@@ -1,0 +1,8 @@
+INFO:     127.0.0.1:22211 - "GET /ask HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56113 - "GET /ask HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63646 - "POST /api/ask/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:4893 - "POST /api/ask/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:27732 - "GET /ask HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34796 - "POST /api/ask/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42154 - "POST /api/ask/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34057 - "POST /api/ask/stream HTTP/1.1" 200 OK

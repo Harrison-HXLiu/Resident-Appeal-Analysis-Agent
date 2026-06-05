@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import SessionLocal, get_session, init_database
 from app.models import AnalysisJob, Appeal, ChatMessage, ChatSession, ImportBatch, Region, Report
-from app.services.agent import ask_question
+from app.services.agent import ask_question, prepare_ask_context
+from app.services.deepseek import DeepSeekService
 from app.services.ai_annotation import refine_annotations_with_ai
 from app.services.analytics import available_regions, clear_dashboard_cache, dashboard_stats
 from app.services.importer import backfill_rule_annotations, import_excel
@@ -167,6 +168,116 @@ def ask_submit(
         }
     )
     return templates.TemplateResponse(request=request, name="ask.html", context=context)
+
+
+def _sse(event: str, payload: dict[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/ask/stream")
+def ask_stream(
+    question: str = Form(...),
+    city: str = Form(""),
+    start: str = Form(""),
+    end: str = Form(""),
+) -> StreamingResponse:
+    def source_to_dict(source) -> dict[str, object]:
+        return {
+            "rank": source.rank,
+            "title": source.title,
+            "received_at": source.received_at,
+            "topic": source.topic,
+            "department": source.department,
+            "external_id": source.external_id,
+            "matched_fields": list(source.matched_fields),
+            "content_excerpt": source.content_excerpt,
+            "reply_excerpt": source.reply_excerpt,
+        }
+
+    def stream():
+        answer = ""
+        answer_source = "local-statistics + rag"
+        with SessionLocal() as stream_session:
+            yield _sse(
+                "status",
+                {"title": "思考中", "detail": "正在检索数据"},
+            )
+            context = prepare_ask_context(
+                stream_session,
+                question,
+                city=city or None,
+                start=start or None,
+                end=end or None,
+            )
+            llm = DeepSeekService()
+            if not llm.enabled:
+                answer = (
+                    "当前未配置 DeepSeek API Key，先返回数据库统计结果。\n\n"
+                    + context.facts
+                    + "\n\n"
+                    + context.evidence_summary
+                    + (
+                        "\n\n代表性案例：\n" + context.evidence.evidence_text
+                        if context.evidence.evidence_text
+                        else "\n\n未检索到足够相关的代表性案例。"
+                    )
+                    + "\n\n说明：当前主题排行来自导入时生成的规则初标；配置 API Key 后可生成更完整的研判答复。"
+                )
+                yield _sse("delta", {"text": answer})
+            else:
+                answer_source = f"{llm.model_name} + rag"
+                yield _sse(
+                    "status",
+                    {"title": "思考中", "detail": "模型正在生成回答"},
+                )
+                try:
+                    pieces: list[str] = []
+                    for piece in llm.stream_complete(context.system_prompt, context.user_prompt):
+                        pieces.append(piece)
+                        yield _sse("delta", {"text": piece})
+                    answer = "".join(pieces)
+                except Exception:
+                    answer_source = "local-statistics + rag (AI fallback)"
+                    answer = (
+                        "DeepSeek 当前调用失败，已回退为数据库统计结果。\n\n"
+                        + context.facts
+                        + "\n\n"
+                        + context.evidence_summary
+                        + (
+                            "\n\n代表性案例：\n" + context.evidence.evidence_text
+                            if context.evidence.evidence_text
+                            else "\n\n未检索到足够相关的代表性案例。"
+                        )
+                        + "\n\n说明：可检查 API Key、模型名称或网络连接后重试。"
+                    )
+                    yield _sse("reset", {"text": answer})
+
+            chat = ChatSession(title=question[:80])
+            chat.messages.extend(
+                [
+                    ChatMessage(role="user", content=question),
+                    ChatMessage(role="assistant", content=answer),
+                ]
+            )
+            stream_session.add(chat)
+            stream_session.commit()
+            yield _sse(
+                "done",
+                {
+                    "answer_source": answer_source,
+                    "answer_html": render_markdown(answer),
+                    "rag_evidence": {
+                        "candidate_count": context.evidence.candidate_count,
+                        "embedding_candidate_count": context.evidence.embedding_candidate_count,
+                        "relevant_count": context.evidence.relevant_count,
+                        "selected_sources": [
+                            source_to_dict(source) for source in context.evidence.selected_sources
+                        ],
+                    },
+                },
+            )
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @app.get("/reports", response_class=HTMLResponse)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,15 @@ from app.services.analytics import dashboard_stats
 from app.services.deepseek import DeepSeekService
 from app.services.privacy import redact_text
 from app.services.rag import RagEvidence, build_evidence
+
+
+@dataclass(frozen=True)
+class AskContext:
+    facts: str
+    evidence: RagEvidence
+    evidence_summary: str
+    system_prompt: str
+    user_prompt: str
 
 
 def infer_time_range_from_question(
@@ -68,13 +78,13 @@ def _facts_as_text(stats: dict[str, object], scope: str) -> str:
     )
 
 
-def ask_question(
+def prepare_ask_context(
     session: Session,
     question: str,
     city: str | None = None,
     start: str | None = None,
     end: str | None = None,
-) -> tuple[str, str, RagEvidence]:
+) -> AskContext:
     start, end = infer_time_range_from_question(question, start, end)
     stats = dashboard_stats(session, city=city, start=start, end=end)
     scope = city or "全部已导入地区"
@@ -86,45 +96,69 @@ def ask_question(
         f"本次关键词候选 {evidence.candidate_count} 条，语义候选 {evidence.embedding_candidate_count} 条，"
         f"选取 {len(evidence.selected_sources)} 条代表性案例。"
     )
+    evidence_note = (
+        "若检索证据数量较少，只能基于有限样本回答；不要把代表案例数量说成全部问题数量。"
+    )
+    system_prompt = (
+        "你是居民留言分析助手。回答必须严格基于提供的统计事实；不得编造数量、"
+        "城市覆盖范围或案例。若用户询问超出数据范围，明确说明。"
+        "主题标签若含 rule 来源，应说明这是初步分类。"
+        "请综合统计摘要和检索证据作答，优先给出具体问题类型、涉及部门、"
+        "代表案例和办理回复特点；引用案例时使用方括号编号，如[1]。用简洁中文作答。"
+    )
+    user_prompt = (
+        f"用户问题（已脱敏）：{redact_text(question)}\n\n"
+        f"可用统计事实：\n{facts}\n\n"
+        f"RAG 检索说明：{evidence_summary}；过滤后高相关 {evidence.relevant_count} 条。{evidence_note}\n\n"
+        f"代表性证据：\n{evidence.evidence_text or '暂无代表性证据'}"
+    )
+    return AskContext(
+        facts=facts,
+        evidence=evidence,
+        evidence_summary=evidence_summary,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+
+
+def ask_question(
+    session: Session,
+    question: str,
+    city: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> tuple[str, str, RagEvidence]:
+    context = prepare_ask_context(session, question, city=city, start=start, end=end)
     llm = DeepSeekService()
     if not llm.enabled:
         answer = (
             "当前未配置 DeepSeek API Key，先返回数据库统计结果。\n\n"
-            + facts
+            + context.facts
             + "\n\n"
-            + evidence_summary
-            + ("\n\n代表性案例：\n" + evidence.evidence_text if evidence.evidence_text else "\n\n未检索到足够相关的代表性案例。")
+            + context.evidence_summary
+            + (
+                "\n\n代表性案例：\n" + context.evidence.evidence_text
+                if context.evidence.evidence_text
+                else "\n\n未检索到足够相关的代表性案例。"
+            )
             + "\n\n说明：当前主题排行来自导入时生成的规则初标；配置 API Key 后可生成更完整的研判答复。"
         )
-        return answer, "local-statistics + rag", evidence
+        return answer, "local-statistics + rag", context.evidence
 
     try:
-        evidence_note = (
-            "若检索证据数量较少，只能基于有限样本回答；不要把代表案例数量说成全部问题数量。"
-        )
-        answer = llm.complete(
-            (
-                "你是居民留言分析助手。回答必须严格基于提供的统计事实；不得编造数量、"
-                "城市覆盖范围或案例。若用户询问超出数据范围，明确说明。"
-                "主题标签若含 rule 来源，应说明这是初步分类。"
-                "请综合统计摘要和检索证据作答，优先给出具体问题类型、涉及部门、"
-                "代表案例和办理回复特点；引用案例时使用方括号编号，如[1]。用简洁中文作答。"
-            ),
-            (
-                f"用户问题（已脱敏）：{redact_text(question)}\n\n"
-                f"可用统计事实：\n{facts}\n\n"
-                f"RAG 检索说明：{evidence_summary}；过滤后高相关 {evidence.relevant_count} 条。{evidence_note}\n\n"
-                f"代表性证据：\n{evidence.evidence_text or '暂无代表性证据'}"
-            ),
-        )
-        return answer, f"{llm.model_name} + rag", evidence
+        answer = llm.complete(context.system_prompt, context.user_prompt)
+        return answer, f"{llm.model_name} + rag", context.evidence
     except Exception:
         answer = (
             "DeepSeek 当前调用失败，已回退为数据库统计结果。\n\n"
-            + facts
+            + context.facts
             + "\n\n"
-            + evidence_summary
-            + ("\n\n代表性案例：\n" + evidence.evidence_text if evidence.evidence_text else "\n\n未检索到足够相关的代表性案例。")
+            + context.evidence_summary
+            + (
+                "\n\n代表性案例：\n" + context.evidence.evidence_text
+                if context.evidence.evidence_text
+                else "\n\n未检索到足够相关的代表性案例。"
+            )
             + "\n\n说明：可检查 API Key、模型名称或网络连接后重试。"
         )
-        return answer, "local-statistics + rag (AI fallback)", evidence
+        return answer, "local-statistics + rag (AI fallback)", context.evidence

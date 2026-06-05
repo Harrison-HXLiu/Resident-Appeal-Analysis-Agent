@@ -44,6 +44,25 @@ class DeepSeekService:
         )
         return response.choices[0].message.content or ""
 
+    def stream_complete(self, system_prompt: str, user_prompt: str):
+        if not self._client:
+            raise LLMUnavailable("尚未配置 DEEPSEEK_API_KEY。")
+        stream = self._client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            content = chunk.choices[0].delta.content
+            if content:
+                yield content
+
     def complete_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         if not self._client:
             raise LLMUnavailable("尚未配置 DEEPSEEK_API_KEY。")

@@ -51,35 +51,37 @@
                 </div>
             </div>
         </header>
-        {% if answer %}
-        <p class="source">生成来源：{{ answer_source }}</p>
-        <article class="markdown-answer">{{ answer_html | safe }}</article>
-        {% if rag_evidence %}
-        <section class="rag-sources">
-            <h3>检索依据</h3>
-            <p class="source">
-                匹配候选 {{ rag_evidence.candidate_count }} 条，
-                语义候选 {{ rag_evidence.embedding_candidate_count }} 条，
-                过滤后高相关 {{ rag_evidence.relevant_count }} 条，
-                送入模型 {{ rag_evidence.selected_sources|length }} 条代表案例。
-            </p>
-            {% for item in rag_evidence.selected_sources %}
-            <details class="source-card" {% if loop.index <= 3 %}open{% endif %}>
-                <summary>
-                    <strong>[{{ item.rank }}] {{ item.title }}</strong>
-                    <span>{{ item.received_at }} · {{ item.topic }} · {{ item.department }}</span>
-                </summary>
-                <p><b>信件编号：</b>{{ item.external_id }}</p>
-                <p><b>命中字段：</b>{{ item.matched_fields|join("、") if item.matched_fields else "综合相关" }}</p>
-                <p><b>来件摘要：</b>{{ item.content_excerpt }}</p>
-                <p><b>回复摘要：</b>{{ item.reply_excerpt or "暂无回复摘要" }}</p>
-            </details>
-            {% endfor %}
-        </section>
-        {% endif %}
-        {% else %}
-        <div class="empty">填写问题后，结果将在此显示。</div>
-        {% endif %}
+        <div id="answer-body">
+            {% if answer %}
+            <p class="source">生成来源：{{ answer_source }}</p>
+            <article class="markdown-answer">{{ answer_html | safe }}</article>
+            {% if rag_evidence %}
+            <section class="rag-sources">
+                <h3>检索依据</h3>
+                <p class="source">
+                    匹配候选 {{ rag_evidence.candidate_count }} 条，
+                    语义候选 {{ rag_evidence.embedding_candidate_count }} 条，
+                    过滤后高相关 {{ rag_evidence.relevant_count }} 条，
+                    送入模型 {{ rag_evidence.selected_sources|length }} 条代表案例。
+                </p>
+                {% for item in rag_evidence.selected_sources %}
+                <details class="source-card" {% if loop.index <= 3 %}open{% endif %}>
+                    <summary>
+                        <strong>[{{ item.rank }}] {{ item.title }}</strong>
+                        <span>{{ item.received_at }} · {{ item.topic }} · {{ item.department }}</span>
+                    </summary>
+                    <p><b>信件编号：</b>{{ item.external_id }}</p>
+                    <p><b>命中字段：</b>{{ item.matched_fields|join("、") if item.matched_fields else "综合相关" }}</p>
+                    <p><b>来件摘要：</b>{{ item.content_excerpt }}</p>
+                    <p><b>回复摘要：</b>{{ item.reply_excerpt or "暂无回复摘要" }}</p>
+                </details>
+                {% endfor %}
+            </section>
+            {% endif %}
+            {% else %}
+            <div class="empty">填写问题后，结果将在此显示。</div>
+            {% endif %}
+        </div>
     </article>
 </section>
 <script>
@@ -87,9 +89,14 @@
     const progress = document.getElementById("analysis-progress");
     const progressTitle = document.getElementById("analysis-progress-title");
     const progressDetail = document.getElementById("analysis-progress-detail");
+    const answerBody = document.getElementById("answer-body");
 
     if (askForm && progress) {
-        askForm.addEventListener("submit", () => {
+        askForm.addEventListener("submit", async (event) => {
+            if (!window.fetch || !window.ReadableStream || !window.TextDecoder) {
+                return;
+            }
+            event.preventDefault();
             const submitButton = askForm.querySelector('button[type="submit"]');
             progress.classList.remove("is-idle", "is-complete");
             progress.classList.add("is-thinking");
@@ -99,7 +106,131 @@
                 submitButton.disabled = true;
                 submitButton.textContent = "分析中";
             }
+
+            const source = document.createElement("p");
+            source.className = "source";
+            source.textContent = "生成来源：正在生成";
+            const answer = document.createElement("article");
+            answer.className = "markdown-answer is-streaming";
+            answer.setAttribute("aria-live", "polite");
+            answerBody.replaceChildren(source, answer);
+
+            try {
+                const response = await fetch("/api/ask/stream", {
+                    method: "POST",
+                    body: new FormData(askForm),
+                });
+                if (!response.ok || !response.body) {
+                    askForm.submit();
+                    return;
+                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = "";
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+                    buffer += decoder.decode(value, { stream: true });
+                    const events = buffer.split("\n\n");
+                    buffer = events.pop() || "";
+                    for (const item of events) {
+                        handleStreamEvent(item, source, answer);
+                    }
+                }
+                if (buffer.trim()) {
+                    handleStreamEvent(buffer, source, answer);
+                }
+            } catch (error) {
+                askForm.submit();
+            } finally {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = "开始分析";
+                }
+            }
         });
+    }
+
+    function handleStreamEvent(rawEvent, sourceNode, answerNode) {
+        const lines = rawEvent.split("\n");
+        const eventLine = lines.find((line) => line.startsWith("event: "));
+        const dataLine = lines.find((line) => line.startsWith("data: "));
+        if (!eventLine || !dataLine) {
+            return;
+        }
+        const eventName = eventLine.slice(7);
+        const payload = JSON.parse(dataLine.slice(6));
+        if (eventName === "status") {
+            progressTitle.textContent = payload.title || "思考中";
+            progressDetail.textContent = payload.detail || "模型正在分析数据";
+            return;
+        }
+        if (eventName === "delta") {
+            answerNode.textContent += payload.text || "";
+            return;
+        }
+        if (eventName === "reset") {
+            answerNode.textContent = payload.text || "";
+            return;
+        }
+        if (eventName === "done") {
+            progress.classList.remove("is-thinking", "is-idle");
+            progress.classList.add("is-complete");
+            progressTitle.textContent = "思考完成";
+            progressDetail.textContent = "模型分析已完成";
+            sourceNode.textContent = `生成来源：${payload.answer_source}`;
+            answerNode.classList.remove("is-streaming");
+            answerNode.innerHTML = payload.answer_html || "";
+            renderEvidence(payload.rag_evidence);
+        }
+    }
+
+    function renderEvidence(evidence) {
+        if (!evidence || !Array.isArray(evidence.selected_sources) || evidence.selected_sources.length === 0) {
+            return;
+        }
+        const section = document.createElement("section");
+        section.className = "rag-sources";
+        const title = document.createElement("h3");
+        title.textContent = "检索依据";
+        const summary = document.createElement("p");
+        summary.className = "source";
+        summary.textContent = `匹配候选 ${evidence.candidate_count} 条，语义候选 ${evidence.embedding_candidate_count} 条，过滤后高相关 ${evidence.relevant_count} 条，送入模型 ${evidence.selected_sources.length} 条代表案例。`;
+        section.append(title, summary);
+
+        evidence.selected_sources.forEach((item, index) => {
+            const card = document.createElement("details");
+            card.className = "source-card";
+            card.open = index < 3;
+            const summaryNode = document.createElement("summary");
+            const strong = document.createElement("strong");
+            strong.textContent = `[${item.rank}] ${item.title}`;
+            const meta = document.createElement("span");
+            meta.textContent = `${item.received_at} · ${item.topic} · ${item.department}`;
+            summaryNode.append(strong, meta);
+            card.append(summaryNode);
+            addEvidenceLine(card, "信件编号：", item.external_id);
+            addEvidenceLine(
+                card,
+                "命中字段：",
+                item.matched_fields && item.matched_fields.length ? item.matched_fields.join("、") : "综合相关"
+            );
+            addEvidenceLine(card, "来件摘要：", item.content_excerpt);
+            addEvidenceLine(card, "回复摘要：", item.reply_excerpt || "暂无回复摘要");
+            section.append(card);
+        });
+        answerBody.append(section);
+    }
+
+    function addEvidenceLine(card, label, value) {
+        const line = document.createElement("p");
+        const strong = document.createElement("b");
+        strong.textContent = label;
+        line.append(strong, document.createTextNode(value || ""));
+        card.append(line);
     }
 </script>
 {% endblock %}

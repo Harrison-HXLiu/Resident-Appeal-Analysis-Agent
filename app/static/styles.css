@@ -218,6 +218,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .markdown-answer {
     color: #26343a; line-height: 1.82; font-size: 14px;
 }
+.markdown-answer.is-streaming { white-space: pre-wrap; }
 .markdown-answer > *:first-child { margin-top: 0; }
 .markdown-answer > *:last-child { margin-bottom: 0; }
 .markdown-answer h1, .markdown-answer h2, .markdown-answer h3, .markdown-answer h4 {
