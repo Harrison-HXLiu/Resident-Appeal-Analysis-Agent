@@ -9,7 +9,7 @@
     </div>
 </section>
 <section class="chat-layout">
-    <form class="panel query-form" method="post">
+    <form class="panel query-form" method="post" id="ask-form">
         <label>问题
             <textarea name="question" rows="5" required placeholder="例如：苏州民众投诉最多的方面是什么？">{{ question }}</textarea>
         </label>
@@ -32,7 +32,25 @@
         </div>
     </form>
     <article class="panel answer">
-        <h2>分析结果</h2>
+        <header class="answer-header">
+            <div>
+                <p class="section-kicker">ANALYSIS</p>
+                <h2>分析结果</h2>
+            </div>
+            <div
+                class="analysis-progress {% if answer %}is-complete{% else %}is-idle{% endif %}"
+                id="analysis-progress"
+                aria-live="polite"
+            >
+                <span class="progress-ring" aria-hidden="true"></span>
+                <div>
+                    <strong id="analysis-progress-title">{% if answer %}思考完成{% else %}思考中{% endif %}</strong>
+                    <small id="analysis-progress-detail">
+                        {% if answer %}模型分析已完成{% else %}模型正在分析数据{% endif %}
+                    </small>
+                </div>
+            </div>
+        </header>
         {% if answer %}
         <p class="source">生成来源：{{ answer_source }}</p>
         <article class="markdown-answer">{{ answer_html | safe }}</article>
@@ -64,4 +82,24 @@
         {% endif %}
     </article>
 </section>
+<script>
+    const askForm = document.getElementById("ask-form");
+    const progress = document.getElementById("analysis-progress");
+    const progressTitle = document.getElementById("analysis-progress-title");
+    const progressDetail = document.getElementById("analysis-progress-detail");
+
+    if (askForm && progress) {
+        askForm.addEventListener("submit", () => {
+            const submitButton = askForm.querySelector('button[type="submit"]');
+            progress.classList.remove("is-idle", "is-complete");
+            progress.classList.add("is-thinking");
+            progressTitle.textContent = "思考中";
+            progressDetail.textContent = "模型正在分析数据，请稍候。";
+            if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.textContent = "分析中";
+            }
+        });
+    }
+</script>
 {% endblock %}

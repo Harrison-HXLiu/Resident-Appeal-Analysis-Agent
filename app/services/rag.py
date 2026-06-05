@@ -207,6 +207,8 @@ def backfill_chunks(session: Session, limit: int | None = None) -> int:
 
 
 def upsert_chunk_for_appeal(session: Session, appeal: Appeal) -> None:
+    if appeal.id is None:
+        session.flush()
     search_text, title, content, reply = build_chunk_text(appeal)
     chunk = session.scalar(select(AppealChunk).where(AppealChunk.appeal_id == appeal.id))
     if chunk is None:
