@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}地图分析 - {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero compact">
+    <div>
+        <p class="eyebrow">MAP INSIGHT</p>
+        <h1>地图分析</h1>
+        <p class="muted">鼠标指向城市查看群众关注问题排行，点击城市进入现有报告生成页面。</p>
+    </div>
+</section>
+
+<section class="map-layout">
+    <article class="panel map-panel">
+        <div class="map-toolbar">
+            <div>
+                <p class="section-kicker">CITY HOTSPOTS</p>
+                <h2>全国城市诉求热点</h2>
+            </div>
+            <span class="map-note">当前 Demo 仅苏州市有真实数据</span>
+        </div>
+        <div id="china-map" class="china-map" role="img" aria-label="中国地图诉求热点" style="width: 100%; min-height: 560px;"></div>
+        <div id="map-fallback" class="map-fallback" hidden>
+            <p class="muted">地图资源暂时无法加载，可先查看当前 Demo 城市。</p>
+            <a class="button" href="/reports?city=苏州市">查看苏州市报告</a>
+        </div>
+    </article>
+
+    <aside class="panel map-summary">
+        <p class="section-kicker">AVAILABLE CITY</p>
+        <h2>已接入城市</h2>
+        <div id="city-list" class="city-list">
+            <p class="muted">正在加载城市数据。</p>
+        </div>
+    </aside>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script>
+    const mapElement = document.getElementById("china-map");
+    const fallback = document.getElementById("map-fallback");
+    const cityList = document.getElementById("city-list");
+
+    function formatNumber(value) {
+        return Number(value || 0).toLocaleString("zh-CN");
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
+    function topicBars(topics) {
+        if (!topics || topics.length === 0) {
+            return '<p class="map-tip-empty">暂无热点问题数据</p>';
+        }
+        const max = Math.max(...topics.map((item) => item.count || 0), 1);
+        return topics.map((item) => {
+            const width = Math.max(8, Math.round((item.count || 0) / max * 100));
+            return `
+                <div class="map-tip-row">
+                    <span>${escapeHtml(item.name)}</span>
+                    <i><b style="width:${width}%"></b></i>
+                    <strong>${formatNumber(item.count)}</strong>
+                </div>
+            `;
+        }).join("");
+    }
+
+    function cityTooltip(city) {
+        return `
+            <div class="map-tip">
+                <h3>${escapeHtml(city.city)}</h3>
+                <div class="map-tip-metrics">
+                    <span>留言总量 <b>${formatNumber(city.total)}</b></span>
+                    <span>回复率 <b>${city.response_rate}%</b></span>
+                    <span>平均耗时 <b>${city.average_response_hours ?? "暂无"} 小时</b></span>
+                </div>
+                <p>群众最关心的问题</p>
+                ${topicBars(city.top_topics)}
+                <em>点击查看城市报告</em>
+            </div>
+        `;
+    }
+
+    function renderCityList(cities) {
+        if (!cities.length) {
+            cityList.innerHTML = '<p class="muted">暂无已接入城市。</p>';
+            return;
+        }
+        cityList.innerHTML = cities.map((city) => `
+            <a class="city-item" href="${escapeHtml(city.report_url)}">
+                <strong>${escapeHtml(city.city)}</strong>
+                <span>${formatNumber(city.total)} 件留言</span>
+                <small>TOP 问题：${escapeHtml((city.top_topics || []).slice(0, 3).map((item) => item.name).join("、") || "暂无")}</small>
+            </a>
+        `).join("");
+    }
+
+    async function initMap() {
+        try {
+            if (mapElement.clientHeight < 120) {
+                mapElement.style.height = "560px";
+            }
+            const [overviewResponse, geoResponse] = await Promise.all([
+                fetch("/api/map/overview"),
+                fetch("https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json"),
+            ]);
+            const overview = await overviewResponse.json();
+            const chinaGeo = await geoResponse.json();
+            const cities = overview.cities || [];
+            renderCityList(cities);
+
+            echarts.registerMap("china", chinaGeo);
+            const chart = echarts.init(mapElement);
+            const cityByName = new Map(cities.map((city) => [city.city, city]));
+            const scatterData = cities.map((city) => ({
+                name: city.city,
+                value: [city.lng, city.lat, city.total],
+                city,
+            }));
+
+            chart.setOption({
+                tooltip: {
+                    trigger: "item",
+                    borderWidth: 0,
+                    padding: 0,
+                    backgroundColor: "transparent",
+                    formatter(params) {
+                        if (params.data && params.data.city) {
+                            return cityTooltip(params.data.city);
+                        }
+                        return `<div class="map-tip map-tip-muted"><h3>${escapeHtml(params.name)}</h3><p>暂无城市留言数据</p></div>`;
+                    },
+                },
+                geo: {
+                    map: "china",
+                    roam: true,
+                    zoom: 1.18,
+                    itemStyle: {
+                        areaColor: "#eef0ea",
+                        borderColor: "#cfd8d3",
+                        borderWidth: 1,
+                    },
+                    emphasis: {
+                        itemStyle: {
+                            areaColor: "#dcebe5",
+                        },
+                        label: {
+                            color: "#17242a",
+                        },
+                    },
+                },
+                series: [
+                    {
+                        type: "map",
+                        map: "china",
+                        geoIndex: 0,
+                        selectedMode: false,
+                        data: [],
+                    },
+                    {
+                        name: "城市诉求热点",
+                        type: "effectScatter",
+                        coordinateSystem: "geo",
+                        data: scatterData,
+                        symbolSize(value) {
+                            return Math.max(13, Math.min(28, Math.sqrt(value[2] || 1) / 4));
+                        },
+                        rippleEffect: {
+                            brushType: "stroke",
+                            scale: 3,
+                        },
+                        itemStyle: {
+                            color: "#12736b",
+                            shadowBlur: 12,
+                            shadowColor: "rgba(18, 115, 107, .28)",
+                        },
+                        label: {
+                            show: true,
+                            formatter: "{b}",
+                            position: "right",
+                            color: "#095750",
+                            fontWeight: 700,
+                        },
+                        zlevel: 2,
+                    },
+                ],
+            });
+
+            chart.on("click", (params) => {
+                const city = params.data && params.data.city ? params.data.city : cityByName.get(params.name);
+                if (city && city.report_url) {
+                    window.location.href = city.report_url;
+                }
+            });
+
+            window.addEventListener("resize", () => chart.resize());
+        } catch (error) {
+            fallback.hidden = false;
+            mapElement.classList.add("is-unavailable");
+            cityList.innerHTML = `
+                <a class="city-item" href="/reports?city=苏州市">
+                    <strong>苏州市</strong>
+                    <span>当前 Demo 城市</span>
+                    <small>点击进入报告生成页面</small>
+                </a>
+            `;
+        }
+    }
+
+    initMap();
+</script>
+{% endblock %}

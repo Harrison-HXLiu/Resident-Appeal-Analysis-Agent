@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
@@ -280,16 +284,62 @@ def ask_stream(
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+CITY_COORDINATES = {
+    "苏州市": {"lng": 120.5853, "lat": 31.2989},
+}
+
+
+@app.get("/map", response_class=HTMLResponse)
+def map_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
+    context = _base_context(request, session)
+    return templates.TemplateResponse(request=request, name="map.html", context=context)
+
+
+@app.get("/api/map/overview")
+def map_overview(session: Session = Depends(get_session)) -> dict[str, object]:
+    cities: list[dict[str, object]] = []
+    for region in available_regions(session):
+        coordinates = CITY_COORDINATES.get(region.city)
+        if not coordinates:
+            continue
+        stats = dashboard_stats(session, province=region.province, city=region.city)
+        cities.append(
+            {
+                "province": region.province,
+                "city": region.city,
+                "lng": coordinates["lng"],
+                "lat": coordinates["lat"],
+                "total": stats["total"],
+                "responded": stats["responded"],
+                "response_rate": stats["response_rate"],
+                "average_response_hours": stats["average_response_hours"],
+                "top_topics": stats["topics"][:5],
+                "report_url": f"/reports?city={quote(region.city)}",
+            }
+        )
+    return {"cities": cities}
+
+
 @app.get("/reports", response_class=HTMLResponse)
 def reports_page(
     request: Request,
     selected: int | None = None,
+    city: str | None = None,
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
-    reports = list(session.scalars(select(Report).order_by(Report.created_at.desc()).limit(30)).all())
+    selected_region = session.scalar(select(Region).where(Region.city == city)) if city else None
+    reports_statement = select(Report).order_by(Report.created_at.desc()).limit(30)
+    if selected_region:
+        reports_statement = (
+            select(Report)
+            .where(Report.region_id == selected_region.id)
+            .order_by(Report.created_at.desc())
+            .limit(30)
+        )
+    reports = list(session.scalars(reports_statement).all())
     report = session.get(Report, selected) if selected else (reports[0] if reports else None)
     context = _base_context(request, session)
-    context.update({"reports": reports, "report": report})
+    context.update({"reports": reports, "report": report, "selected_city": city or ""})
     return templates.TemplateResponse(request=request, name="reports.html", context=context)
 
 

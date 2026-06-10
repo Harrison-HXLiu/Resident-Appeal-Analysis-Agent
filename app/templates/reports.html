@@ -11,7 +11,7 @@
         <label>地区
             <select name="region_id" required>
                 {% for region in regions %}
-                <option value="{{ region.id }}">{{ region.province }} {{ region.city }}</option>
+                <option value="{{ region.id }}" {% if selected_city == region.city %}selected{% endif %}>{{ region.province }} {{ region.city }}</option>
                 {% endfor %}
             </select>
         </label>
@@ -24,7 +24,7 @@
     <aside class="panel report-list">
         <h2>历史报告</h2>
         {% for item in reports %}
-        <a href="/reports?selected={{ item.id }}" class="{% if report and item.id == report.id %}selected{% endif %}">
+        <a href="/reports?selected={{ item.id }}{% if selected_city %}&city={{ selected_city }}{% endif %}" class="{% if report and item.id == report.id %}selected{% endif %}">
             <strong>{{ item.title }}</strong>
             <small>{{ item.created_at.strftime("%Y-%m-%d %H:%M") }} · {{ item.generated_by }}</small>
         </a>
