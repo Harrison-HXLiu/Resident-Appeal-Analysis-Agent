@@ -265,6 +265,41 @@ pre {
 .report-list strong { display: block; font-size: 14px; line-height: 1.45; }
 .report-list small { display: block; margin-top: 8px; color: var(--muted); }
 .panel-heading { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 23px; }
+.report-view { padding: 26px 30px; }
+.report-reader-header {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 24px;
+    margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid var(--line);
+}
+.report-reader-header h2 { margin: 0; font-size: 24px; line-height: 1.35; }
+.report-meta { margin: 9px 0 0; color: var(--muted); font-size: 13px; }
+.report-charts {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 26px;
+}
+.report-chart-card {
+    padding: 16px 18px 12px; border: 1px solid #e8e3da; border-radius: 10px; background: #fbfaf7;
+}
+.report-chart-card.wide { grid-column: 1 / -1; }
+.report-chart-card.in-flow { margin: 12px 0 22px; }
+.report-chart-card h3 { margin: 0 0 12px; font-size: 16px; }
+.report-chart { height: 260px; }
+.report-chart.small { height: 230px; }
+.chart-empty {
+    display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 13px;
+}
+.report-content {
+    max-width: 980px; margin: 0 auto; font-size: 15px; line-height: 1.95;
+}
+.report-content h1 {
+    margin: 4px 0 22px; padding-bottom: 16px; border-bottom: 2px solid var(--primary);
+    font-size: 28px; line-height: 1.35;
+}
+.report-content h2 {
+    margin: 32px 0 14px; padding-left: 12px; border-left: 4px solid var(--primary);
+    font-size: 21px;
+}
+.report-content h3 { margin-top: 24px; font-size: 17px; }
+.report-content p { text-align: justify; }
+.report-content table { font-size: 14px; }
 .map-layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
 .map-panel { min-height: 620px; }
 .map-toolbar {
@@ -340,8 +375,9 @@ th { color: var(--muted); font-size: 13px; font-weight: 500; }
     .hero, .filters { display: block; }
     .filters label, .filters button { margin-top: 10px; width: 100%; }
     .cards { grid-template-columns: repeat(2, 1fr); }
-    .chart-grid, .chat-layout, .report-layout, .management-grid, .map-layout { grid-template-columns: 1fr; }
+    .chart-grid, .chat-layout, .report-layout, .management-grid, .map-layout, .report-charts { grid-template-columns: 1fr; }
     .china-map { height: 480px; }
+    .report-reader-header { flex-direction: column; }
 }
 @media (max-width: 640px) {
     .topbar-meta { width: 100%; justify-content: space-between; }

@@ -123,6 +123,7 @@ def dashboard_stats(
         "types": _group_ranking(session, Appeal.appeal_type, conditions, 10),
         "departments": _group_ranking(session, Appeal.department, conditions, 12),
         "topics": _group_ranking(session, AppealAnnotation.topic, conditions, 12, annotation=True),
+        "subtopics": _group_ranking(session, AppealAnnotation.subtopic, conditions, 12, annotation=True),
         "topic_sources": topic_sources,
         "annotated": sum(topic_sources.values()),
         "monthly": [{"month": month, "count": count} for month, count in monthly_rows],

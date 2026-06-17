@@ -34,15 +34,123 @@
     </aside>
     <article class="panel report-view">
         {% if report %}
-        <div class="panel-heading">
-            <h2>{{ report.title }}</h2>
+        <header class="report-reader-header">
+            <div>
+                <p class="section-kicker">RESEARCH REPORT</p>
+                <h2>{{ report.title }}</h2>
+                <p class="report-meta">
+                    {{ report.created_at.strftime("%Y-%m-%d %H:%M") }} · {{ report.generated_by }}
+                    {% if report.period_start or report.period_end %}
+                    · {{ report.period_start.strftime("%Y-%m-%d") if report.period_start else "最早数据" }}
+                    至 {{ report.period_end.strftime("%Y-%m-%d") if report.period_end else "最新数据" }}
+                    {% endif %}
+                </p>
+            </div>
             <a class="button secondary" href="/reports/{{ report.id }}/download">下载 Markdown</a>
-        </div>
-        <pre>{{ report.content }}</pre>
+        </header>
+
+        <article class="markdown-answer report-content" id="report-content">{{ report_html | safe }}</article>
         {% else %}
         <div class="empty">选择范围并生成第一份报告。</div>
         {% endif %}
     </article>
 </section>
+{% if report %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script>
+    const reportChartData = {{ report_chart_json | safe }};
+
+    function createChartCard(id, kicker, title) {
+        const card = document.createElement("section");
+        card.className = "report-chart-card in-flow";
+        card.innerHTML = `
+            <div>
+                <p class="section-kicker">${kicker}</p>
+                <h3>${title}</h3>
+            </div>
+            <div id="${id}" class="report-chart"></div>
+        `;
+        return card;
+    }
+
+    function insertChartAfterHeading(needle, card) {
+        const content = document.getElementById("report-content");
+        if (!content) {
+            return false;
+        }
+        const headings = Array.from(content.querySelectorAll("h2, h3, h4"));
+        const target = headings.find((heading) => heading.textContent.trim().includes(needle));
+        if (!target) {
+            return false;
+        }
+        target.insertAdjacentElement("afterend", card);
+        return true;
+    }
+
+    function removeDuplicatedReportTitle() {
+        const content = document.getElementById("report-content");
+        if (!content) {
+            return;
+        }
+        const firstHeading = content.querySelector("h1");
+        if (firstHeading) {
+            firstHeading.remove();
+        }
+    }
+
+    function renderHorizontalBar(elementId, rows, color) {
+        const element = document.getElementById(elementId);
+        if (!element) {
+            return;
+        }
+        if (!window.echarts) {
+            element.innerHTML = '<div class="chart-empty">图表资源暂时无法加载</div>';
+            return;
+        }
+        if (!rows || rows.length === 0) {
+            element.innerHTML = '<div class="chart-empty">暂无可视化数据</div>';
+            return;
+        }
+        const chart = echarts.init(element);
+        chart.setOption({
+            grid: { left: 90, right: 24, top: 12, bottom: 24 },
+            tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+            xAxis: { type: "value", axisLine: { show: false }, splitLine: { lineStyle: { color: "#ece7df" } } },
+            yAxis: {
+                type: "category",
+                data: rows.map((item) => item.name).reverse(),
+                axisTick: { show: false },
+                axisLine: { show: false },
+            },
+            series: [{
+                type: "bar",
+                data: rows.map((item) => item.count).reverse(),
+                barWidth: 16,
+                itemStyle: { color, borderRadius: [0, 5, 5, 0] },
+                label: { show: true, position: "right", formatter: "{c}" },
+            }],
+        });
+        window.addEventListener("resize", () => chart.resize());
+    }
+
+    removeDuplicatedReportTitle();
+    insertChartAfterHeading(
+        "图1 居民诉求总体分布_一级标签",
+        createChartCard("report-chart-topics", "FIGURE 1", "居民诉求总体分布_一级标签")
+    );
+    insertChartAfterHeading(
+        "图2 前五大领域详析_二级标签",
+        createChartCard("report-chart-top5", "FIGURE 2", "前五大领域详析_二级标签")
+    );
+    insertChartAfterHeading(
+        "高共识建议Top榜_语义归并后的具体建议",
+        createChartCard("report-chart-types", "COLUMN", "高共识建议Top榜_语义归并后的具体建议")
+    );
+
+    renderHorizontalBar("report-chart-topics", reportChartData.topics, "#12736b");
+    renderHorizontalBar("report-chart-top5", reportChartData.top_topics, "#d78a48");
+    renderHorizontalBar("report-chart-types", reportChartData.types, "#4f7f9f");
+</script>
+{% endif %}
 {% endblock %}
 

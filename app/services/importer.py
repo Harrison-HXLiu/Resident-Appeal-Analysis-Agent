@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Appeal, AppealAnnotation, ImportBatch, Region
 from app.services.classification import classify_by_rule
 from app.services.privacy import redact_text
-from app.services.rag import upsert_chunk_for_appeal
+from app.services.rag import rebuild_fts_index, upsert_chunk_for_appeal
 
 
 REQUIRED_COLUMNS = ["来件时间", "回复时间", "来件类型", "来件标题", "来件内容", "回复部门", "回复内容"]
@@ -76,23 +76,36 @@ def _set_rule_annotation(appeal: Appeal) -> None:
         annotation = AppealAnnotation()
         appeal.annotation = annotation
     annotation.topic = result.topic
+    annotation.subtopic = result.subtopic
     annotation.keywords = result.keywords
     annotation.summary = result.summary
     annotation.urgency = result.urgency
     annotation.source = "rule"
-    annotation.model_name = "rule-v1"
+    annotation.model_name = "rule-v2-taxonomy"
     annotation.confidence = result.confidence
 
 
 def backfill_rule_annotations(session: Session, region_id: int | None = None) -> int:
-    statement = select(Appeal).outerjoin(AppealAnnotation).where(AppealAnnotation.id.is_(None))
+    statement = (
+        select(Appeal)
+        .outerjoin(AppealAnnotation)
+        .where(
+            or_(
+                AppealAnnotation.id.is_(None),
+                (AppealAnnotation.source == "rule")
+                & (AppealAnnotation.model_name != "rule-v2-taxonomy"),
+            )
+        )
+    )
     if region_id is not None:
         statement = statement.where(Appeal.region_id == region_id)
     appeals = list(session.scalars(statement).all())
     for appeal in appeals:
         _set_rule_annotation(appeal)
+        upsert_chunk_for_appeal(session, appeal)
     if appeals:
         session.commit()
+        rebuild_fts_index()
     return len(appeals)
 
 

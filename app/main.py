@@ -289,6 +289,30 @@ CITY_COORDINATES = {
 }
 
 
+def _report_chart_payload(report: Report | None, session: Session) -> dict[str, object]:
+    if not report:
+        return {"topics": [], "top_topics": [], "types": [], "meta": {}}
+    region = session.get(Region, report.region_id)
+    if not region:
+        return {"topics": [], "top_topics": [], "types": [], "meta": {}}
+    start = report.period_start.date().isoformat() if report.period_start else None
+    end = report.period_end.date().isoformat() if report.period_end else None
+    stats = dashboard_stats(session, province=region.province, city=region.city, start=start, end=end)
+    return {
+        "topics": stats["topics"][:8],
+        "top_topics": (stats.get("subtopics") or stats["topics"])[:8],
+        "types": stats["types"][:6],
+        "meta": {
+            "city": region.city,
+            "province": region.province,
+            "total": stats["total"],
+            "responded": stats["responded"],
+            "response_rate": stats["response_rate"],
+            "average_response_hours": stats["average_response_hours"],
+        },
+    }
+
+
 @app.get("/map", response_class=HTMLResponse)
 def map_page(request: Request, session: Session = Depends(get_session)) -> HTMLResponse:
     context = _base_context(request, session)
@@ -338,8 +362,23 @@ def reports_page(
         )
     reports = list(session.scalars(reports_statement).all())
     report = session.get(Report, selected) if selected else (reports[0] if reports else None)
+    report_html = render_markdown(report.content) if report else ""
+    report_chart_json = (
+        json.dumps(_report_chart_payload(report, session), ensure_ascii=False, default=str)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
     context = _base_context(request, session)
-    context.update({"reports": reports, "report": report, "selected_city": city or ""})
+    context.update(
+        {
+            "reports": reports,
+            "report": report,
+            "report_html": report_html,
+            "report_chart_json": report_chart_json,
+            "selected_city": city or "",
+        }
+    )
     return templates.TemplateResponse(request=request, name="reports.html", context=context)
 
 
