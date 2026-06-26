@@ -5,7 +5,7 @@
     <div>
         <p class="eyebrow">MAP INSIGHT</p>
         <h1>地图分析</h1>
-        <p class="muted">鼠标指向城市查看群众关注问题排行，点击城市进入现有报告生成页面。</p>
+        <p class="muted">鼠标指向城市查看群众关注问题排行，点击城市进入报告生成页面。地图脚本与底图已本地化，公网访问不再依赖外部 CDN。</p>
     </div>
 </section>
 
@@ -34,7 +34,7 @@
     </aside>
 </section>
 
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="/static/vendor/echarts.min.js"></script>
 <script>
     const mapElement = document.getElementById("china-map");
     const fallback = document.getElementById("map-fallback");
@@ -102,13 +102,19 @@
 
     async function initMap() {
         try {
+            if (!window.echarts) {
+                throw new Error("ECharts is not available");
+            }
             if (mapElement.clientHeight < 120) {
                 mapElement.style.height = "560px";
             }
             const [overviewResponse, geoResponse] = await Promise.all([
                 fetch("/api/map/overview"),
-                fetch("https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json"),
+                fetch("/static/maps/china.json"),
             ]);
+            if (!overviewResponse.ok || !geoResponse.ok) {
+                throw new Error("Map data failed to load");
+            }
             const overview = await overviewResponse.json();
             const chinaGeo = await geoResponse.json();
             const cities = overview.cities || [];
@@ -146,12 +152,8 @@
                         borderWidth: 1,
                     },
                     emphasis: {
-                        itemStyle: {
-                            areaColor: "#dcebe5",
-                        },
-                        label: {
-                            color: "#17242a",
-                        },
+                        itemStyle: { areaColor: "#dcebe5" },
+                        label: { color: "#17242a" },
                     },
                 },
                 series: [
@@ -170,10 +172,7 @@
                         symbolSize(value) {
                             return Math.max(13, Math.min(28, Math.sqrt(value[2] || 1) / 4));
                         },
-                        rippleEffect: {
-                            brushType: "stroke",
-                            scale: 3,
-                        },
+                        rippleEffect: { brushType: "stroke", scale: 3 },
                         itemStyle: {
                             color: "#12736b",
                             shadowBlur: 12,

@@ -56,7 +56,7 @@
     </article>
 </section>
 {% if report %}
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="/static/vendor/echarts.min.js"></script>
 <script>
     const reportChartData = {{ report_chart_json | safe }};
 
@@ -135,16 +135,16 @@
 
     removeDuplicatedReportTitle();
     insertChartAfterHeading(
-        "图1 居民诉求总体分布_一级标签",
-        createChartCard("report-chart-topics", "FIGURE 1", "居民诉求总体分布_一级标签")
+        "热点主题分布",
+        createChartCard("report-chart-topics", "FIGURE 1", "苏州市居民诉求热点主题分布")
     );
     insertChartAfterHeading(
-        "图2 前五大领域详析_二级标签",
-        createChartCard("report-chart-top5", "FIGURE 2", "前五大领域详析_二级标签")
+        "细分议题观察",
+        createChartCard("report-chart-top5", "FIGURE 2", "重点细分议题分布")
     );
     insertChartAfterHeading(
-        "高共识建议Top榜_语义归并后的具体建议",
-        createChartCard("report-chart-types", "COLUMN", "高共识建议Top榜_语义归并后的具体建议")
+        "诉求类型结构",
+        createChartCard("report-chart-types", "FIGURE 3", "来件类型结构")
     );
 
     renderHorizontalBar("report-chart-topics", reportChartData.topics, "#12736b");

@@ -322,8 +322,13 @@ def map_page(request: Request, session: Session = Depends(get_session)) -> HTMLR
 @app.get("/api/map/overview")
 def map_overview(session: Session = Depends(get_session)) -> dict[str, object]:
     cities: list[dict[str, object]] = []
-    for region in available_regions(session):
-        coordinates = CITY_COORDINATES.get(region.city)
+    regions = available_regions(session)
+    for region in regions:
+        coordinates = CITY_COORDINATES.get(region.city) or (
+            {"lng": 120.5853, "lat": 31.2989}
+            if "苏州" in region.city or len(regions) == 1
+            else None
+        )
         if not coordinates:
             continue
         stats = dashboard_stats(session, province=region.province, city=region.city)

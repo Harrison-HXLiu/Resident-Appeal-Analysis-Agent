@@ -31,17 +31,29 @@ class DeepSeekService:
     def model_name(self) -> str:
         return self.settings.deepseek_model
 
-    def complete(self, system_prompt: str, user_prompt: str) -> str:
+    def complete(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        timeout: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         if not self._client:
             raise LLMUnavailable("尚未配置 DEEPSEEK_API_KEY。")
-        response = self._client.chat.completions.create(
-            model=self.model_name,
-            messages=[
+        payload = {
+            "model": self.model_name,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.2,
-        )
+            "temperature": 0.2,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if timeout is not None:
+            payload["timeout"] = timeout
+        response = self._client.chat.completions.create(**payload)
         return response.choices[0].message.content or ""
 
     def stream_complete(self, system_prompt: str, user_prompt: str):

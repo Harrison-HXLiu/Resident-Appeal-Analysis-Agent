@@ -1,85 +1,308 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, select
+from sqlalchemy.orm import Session, joinedload
 
-from app.models import Region, Report
-from app.services.agent import _facts_as_text
+from app.models import Appeal, AppealAnnotation, Region, Report
 from app.services.analytics import dashboard_stats
 from app.services.deepseek import DeepSeekService
 
 
+logger = logging.getLogger(__name__)
+
+
+def _shorten(value: str | None, limit: int = 220) -> str:
+    text = " ".join((value or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _name_count(item: dict[str, object]) -> tuple[str, int]:
+    return str(item.get("name") or "未分类"), int(item.get("count") or 0)
+
+
 def _ranking_lines(rows: list[dict[str, object]], limit: int = 10) -> str:
-    return "\n".join(
-        f"{index}. {item['name']}：{item['count']} 件"
-        for index, item in enumerate(rows[:limit], start=1)
-    )
+    lines: list[str] = []
+    for index, item in enumerate(rows[:limit], start=1):
+        name, count = _name_count(item)
+        lines.append(f"{index}. {name}：{count} 件")
+    return "\n".join(lines)
 
 
-def _local_report(title: str, facts: str, stats: dict[str, object]) -> str:
-    topics = _ranking_lines(stats["topics"], 10)
-    subtopics = _ranking_lines(stats.get("subtopics") or stats["topics"], 10)
-    departments = _ranking_lines(stats["departments"], 10)
-    types = _ranking_lines(stats["types"], 6)
+def _percentage(count: int, total: int) -> str:
+    return f"{count / total * 100:.1f}%" if total else "0%"
+
+
+def _format_date(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    return ""
+
+
+def _period_label(stats: dict[str, object], start: str | None, end: str | None) -> str:
+    start_label = start or _format_date(stats.get("earliest")) or "最早数据"
+    end_label = end or _format_date(stats.get("latest")) or "最新数据"
+    return f"{start_label}至{end_label}"
+
+
+def _case_query(
+    session: Session,
+    region: Region,
+    start: str | None,
+    end: str | None,
+):
+    conditions = [Appeal.region_id == region.id]
+    if start:
+        conditions.append(Appeal.received_at >= datetime.fromisoformat(start))
+    if end:
+        conditions.append(Appeal.received_at <= datetime.fromisoformat(end))
     return (
-        f"# {title}\n\n"
-        "## （一）摘要（约300字）\n\n"
-        "本报告基于已导入居民留言数据，对居民政策诉求结构、热点领域和政府回应情况进行阶段性分析。"
-        "从现有数据看，诉求主要集中在住房建设、交通出行、城市管理等与日常生活密切相关的领域，"
-        "反映出居民对居住品质、城市运行秩序和公共服务供给的持续关注。政府回应总体保持较高水平，"
-        "但不同领域和部门之间仍可能存在办理压力、回复充分性和闭环解决能力差异。由于当前样本主要覆盖单一城市，"
-        "城乡、城市层次及区域板块比较尚不具备完整数据基础，后续需在多城市数据接入后进一步深化。\n\n"
-        "## （二）居民政策诉求总体分析（约1000字）\n\n"
-        "### 1. 图1 居民诉求总体分布_一级标签\n\n"
-        "本图由页面根据主题统计自动渲染。\n\n"
-        "### 2. 具体分析（约300字）\n\n"
-        f"{facts}\n\n"
-        "从一级标签分布看，居民诉求呈现明显的民生基础领域集中态势。头部领域集中度越高，说明治理压力越集中，"
-        "也意味着后续可以围绕高频共性问题建立专题台账和跨部门协同机制。若“其他”类占比较高，则提示当前标签体系仍需进一步细化，"
-        "应结合语义识别对未充分归类的诉求进行二次归并。\n\n"
-        "### 3. 图2 前五大领域详析_二级标签\n\n"
-        "当前数据暂未形成稳定二级标签体系，页面先以一级标签 TOP5 作为重点领域详析图展示。\n\n"
-        "### 4. 具体分析（约700字）\n\n"
-        f"{subtopics or '暂无可分析二级标签。'}\n\n"
-        "上述重点领域反映居民对公共服务、城市治理和基本民生保障的集中关注。住房建设类诉求通常对应房屋质量、物业服务、"
-        "小区配套和居住环境；交通出行类诉求通常反映道路通行、停车、公共交通和交通安全；城市管理类诉求往往与市容秩序、"
-        "噪声扰民、环境维护和基层治理响应相关。后续如补充二级标签，可进一步识别每个领域内部的核心痛点。\n\n"
-        "## （三）不同结构特征分析对比（约1500字）\n\n"
-        "### 1. 城乡对比（核心，约700字）\n\n"
-        "当前样本主要覆盖苏州市，尚不具备开展全国城乡比较的完整数据基础，因此本节不对城乡差异作超出数据范围的推断。"
-        "从现有单城市样本看，高频诉求集中于居住环境、交通出行和城市治理等日常生活场景，说明居民政策感知主要来自基层公共服务和城市运行秩序。"
-        "后续如接入区县、街镇及城乡属性字段，可进一步比较城区居民与涉农地区居民在住房、土地、基础设施、养老、医疗等方面的差异。\n\n"
-        "### 2. 城市层次（超大城市/约400字）\n\n"
-        "当前数据暂不支持超大城市、特大城市、大城市和中小城市之间的层次比较。基于苏州市样本，只能观察一个城市内部的诉求结构。"
-        "从现有结果看，城市治理压力更多表现为高频民生事项的集中反映，而非不同城市能级之间的系统差异。后续扩展到全国多城市后，可重点比较超大城市在交通、住房、公共服务承载方面的压力，以及中小城市在基础设施和产业就业方面的诉求。\n\n"
-        "### 3. 东中西东北（约400字）\n\n"
-        "当前数据暂不支持东部、中部、西部和东北地区之间的区域板块比较。苏州市属于东部地区，其诉求结构可作为东部城市治理样本之一，"
-        "但不能据此推断全国区域差异。后续接入多区域城市数据后，可进一步识别东部地区精细化治理诉求、中西部地区基础设施和公共服务可及性诉求、东北地区老旧小区和城市更新诉求等差异。\n\n"
-        "## （四）政府回应与诉求办理情况（约1000字）\n\n"
-        "### 1. 总体分析（约500字）\n\n"
-        "现有统计显示，报告可从回复比例、平均回复时长和部门承办分布三个角度观察政府回应能力。"
-        "较高回复率说明留言办理机制运行较为稳定，但平均回复时长和部门工作量分布仍需结合领域差异进一步分析。"
-        "后续建议引入回复质量语义标签，对回复是否充分、是否模板化、是否形成实质办理进行识别。\n\n"
-        "### 2. 分领域（约500字）\n\n"
-        f"{departments or '暂无部门数据。'}\n\n"
-        "部门办理量较高通常意味着该部门承担了较多居民诉求压力。后续可进一步比较不同领域的平均回复耗时、未回复比例和回复质量，"
-        "识别回应较快、较慢以及容易出现解释性回复较多的领域。由于当前仅有苏州市数据，暂不能点出全国代表性城市前三名，后续多城市数据接入后可补充回应表现较好和较弱城市清单。\n\n"
-        "## （五）对策建议（约400字）\n\n"
-        "一是围绕住房建设、交通出行、城市管理等高频领域建立专题治理台账，推动重复性问题由个案办理转向共性治理。"
-        "二是完善跨部门协同办理机制，针对职责交叉、反复转办的问题建立联合研判和闭环反馈。"
-        "三是提升回复质量评估能力，对模板化、解释性强但解决度不足的回复开展复核。"
-        "四是持续优化诉求分类标签体系，通过语义归并识别高共识问题和潜在风险点。\n\n"
-        "## 专栏 问计于民（约500字）\n\n"
-        "### 1. 图：高共识建议Top榜_语义归并后的具体建议\n\n"
-        "当前页面暂以留言类型分布作为问计于民的基础观察，后续可对建议类留言进行语义归并，形成高共识建议榜。\n\n"
-        "### 2. 具体分析（约500字）\n\n"
-        "#### （1）建议总量与领域分布（约80字）\n\n"
-        f"{types or '暂无来件类型数据。'}\n\n"
-        "#### （2）高共识建议分析\n\n"
-        "建议类留言是观察居民治理期待的重要入口。后续可以从建议类、投诉类和咨询类留言中抽取“诉求指向”，"
-        "再由大模型归并为具体政策建议主题，形成可用于部门研判的高共识建议清单。\n"
+        select(Appeal)
+        .options(joinedload(Appeal.annotation), joinedload(Appeal.region))
+        .outerjoin(AppealAnnotation, AppealAnnotation.appeal_id == Appeal.id)
+        .where(*conditions)
     )
+
+
+def _representative_cases(
+    session: Session,
+    region: Region,
+    stats: dict[str, object],
+    start: str | None,
+    end: str | None,
+    per_topic: int = 2,
+    limit: int = 14,
+) -> list[Appeal]:
+    selected: list[Appeal] = []
+    seen: set[int] = set()
+    topics = [str(item.get("name") or "") for item in stats.get("topics", [])[:6] if item.get("name")]
+
+    for topic in topics:
+        statement = (
+            _case_query(session, region, start, end)
+            .where(
+                AppealAnnotation.topic == topic,
+                Appeal.reply_content.is_not(None),
+                Appeal.reply_content != "",
+            )
+            .order_by(Appeal.received_at.desc())
+            .limit(per_topic)
+        )
+        for appeal in session.scalars(statement).unique().all():
+            if appeal.id not in seen:
+                selected.append(appeal)
+                seen.add(appeal.id)
+            if len(selected) >= limit:
+                return selected
+
+    fallback = (
+        _case_query(session, region, start, end)
+        .where(Appeal.reply_content.is_not(None), Appeal.reply_content != "")
+        .order_by(Appeal.received_at.desc())
+        .limit(limit * 2)
+    )
+    for appeal in session.scalars(fallback).unique().all():
+        if appeal.id not in seen:
+            selected.append(appeal)
+            seen.add(appeal.id)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _case_lines(cases: list[Appeal], limit: int | None = None) -> str:
+    lines: list[str] = []
+    for index, appeal in enumerate(cases[: limit or len(cases)], start=1):
+        annotation = appeal.annotation
+        topic = annotation.topic if annotation and annotation.topic else "未分类"
+        subtopic = annotation.subtopic if annotation and annotation.subtopic else ""
+        lines.append(
+            "\n".join(
+                [
+                    f"[{index}] 日期：{appeal.received_at:%Y-%m-%d}；类型：{appeal.appeal_type}；主题：{topic}{' / ' + subtopic if subtopic else ''}；回复部门：{appeal.department}",
+                    f"标题：{_shorten(appeal.redacted_title or appeal.title, 120)}",
+                    f"来件摘要：{_shorten(appeal.redacted_content or appeal.content, 260)}",
+                    f"回复摘要：{_shorten(appeal.redacted_reply or appeal.reply_content, 260)}",
+                ]
+            )
+        )
+    return "\n\n".join(lines) if lines else "暂无可引用的典型案例。"
+
+
+def _case_table(cases: list[Appeal], limit: int = 8) -> str:
+    rows = ["| 主题 | 群众反映 | 回复部门 | 办理回应 |", "| --- | --- | --- | --- |"]
+    for appeal in cases[:limit]:
+        annotation = appeal.annotation
+        topic = annotation.topic if annotation and annotation.topic else "未分类"
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    topic.replace("|", " "),
+                    _shorten(appeal.redacted_title or appeal.title, 70).replace("|", " "),
+                    (appeal.department or "").replace("|", " "),
+                    _shorten(appeal.redacted_reply or appeal.reply_content, 90).replace("|", " "),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(rows)
+
+
+def _summary_text(stats: dict[str, object], period: str) -> str:
+    total = int(stats.get("total") or 0)
+    responded = int(stats.get("responded") or 0)
+    response_rate = stats.get("response_rate") or 0
+    avg_hours = stats.get("average_response_hours")
+    top_topics = stats.get("topics", [])[:5]
+    topic_summary = "、".join(
+        f"{name}（{count}件，占{_percentage(count, total)}）"
+        for name, count in (_name_count(item) for item in top_topics)
+    )
+    avg_label = f"{avg_hours}小时" if avg_hours is not None else "暂无可计算均值"
+    return (
+        f"统计期为{period}。共纳入居民留言{total}件，其中已有回复{responded}件，"
+        f"回复率{response_rate}%，平均回复耗时{avg_label}。"
+        f"从主题分布看，关注度较高的议题包括{topic_summary or '暂无稳定主题'}。"
+    )
+
+
+def _local_report(
+    title: str,
+    stats: dict[str, object],
+    period: str,
+    cases: list[Appeal],
+) -> str:
+    total = int(stats.get("total") or 0)
+    top_topics = stats.get("topics", [])[:6]
+    topic_lines = _ranking_lines(stats.get("topics", []), 10)
+    subtopic_lines = _ranking_lines(stats.get("subtopics") or stats.get("topics", []), 10)
+    type_lines = _ranking_lines(stats.get("types", []), 8)
+    department_lines = _ranking_lines(stats.get("departments", []), 10)
+    leading_topic, leading_count = _name_count(top_topics[0]) if top_topics else ("重点民生事项", 0)
+    case_table = _case_table(cases)
+
+    return f"""# {title}
+
+## 一、总体判断
+
+{_summary_text(stats, period)}总体看，苏州市居民诉求主要集中在与日常生活体验、城市运行秩序和基层公共服务直接相关的事项上。{leading_topic}居于前列，反映出相关领域既是群众感知最直接的治理触点，也是后续精细化治理应优先关注的方向。报告建议将高频诉求从“逐件办理”进一步提升为“专题治理”，围绕重复反映、跨部门协同和回复闭环建立持续跟踪机制。
+
+## 二、苏州市居民诉求总体态势
+
+### 1. 诉求类型结构
+
+{type_lines or '暂无来件类型统计。'}
+
+从来件类型看，群众诉求既包含投诉举报类问题，也包含咨询、建议和求助事项。投诉类事项通常指向具体生活困扰，需要较强的现场核查和整改闭环；咨询建议类事项则反映居民对政策解释、公共服务供给和城市治理参与的需求。对苏州而言，报告不宜停留在数量排序，而应把高频类型转化为部门办理压力和公共服务改进方向。
+
+### 2. 热点主题分布
+
+{topic_lines or '暂无主题统计。'}
+
+{leading_topic}等高频主题占比较高，说明群众关注点具有明显的民生导向和场景导向。若某一主题占比持续居前，通常意味着问题并非孤立个案，而可能与管理标准、设施供给、执法频率、物业服务或属地协调机制有关。建议后续按主题建立月度台账，持续观察是否存在同一地点、同一主体或同一类型问题反复出现。
+
+### 3. 细分议题观察
+
+{subtopic_lines or '暂无细分议题统计。'}
+
+细分议题能够帮助部门从“领域判断”进入“具体治理动作”。例如环境、物业、交通、市政等领域内部的问题形态差异较大，只有进一步拆到油烟噪声、停车秩序、小区公共设施、道路通行等具体事项，才便于明确牵头部门、协同部门和办理标准。
+
+## 三、重点议题和典型案例
+
+{case_table}
+
+上述案例显示，群众留言通常不是抽象表达，而是围绕具体地点、具体事项和具体影响提出诉求。回复内容中已经包含核查、解释、转办、整改、巡查等办理动作，说明平台具备一定回应基础。下一步的关键，是把答复中的“已要求整改”“将加强巡查”“已反馈属地”等表述转化为可复核的闭环节点，减少同类问题反复发生。
+
+## 四、政府回应和部门办理情况
+
+### 1. 回复效率
+
+统计期内回复率为{stats.get('response_rate') or 0}%，平均回复耗时为{stats.get('average_response_hours') if stats.get('average_response_hours') is not None else '暂无可计算均值'}小时。较高回复率说明留言办理机制总体运转稳定，但回复效率并不等同于问题解决质量。建议在现有统计基础上增加“是否现场核查、是否明确整改措施、是否说明时限、是否存在后续回访”等语义指标，使回复评价从速度指标延伸到治理效果指标。
+
+### 2. 部门承办压力
+
+{department_lines or '暂无回复部门统计。'}
+
+承办量较高的部门往往处于群众诉求的一线触点，也更容易暴露跨部门协同压力。对于涉及属地管理、行业监管和执法处置交叉的问题，应建立“首接部门负责解释、相关部门协同核查、办理结果统一反馈”的机制，避免群众在多部门之间反复沟通。
+
+## 五、风险信号和治理短板
+
+本期数据提示，应重点关注三类信号：一是高频主题下同类场景反复出现，可能说明常态管理不足；二是回复中多次出现转办、协调、督促等表述，可能说明职责链条较长；三是群众反映事项与回复处置之间若缺少复查信息，容易造成“已回复但感受未改善”。这些问题不一定意味着办理不到位，但值得纳入重点跟踪清单。
+
+## 六、工作建议
+
+第一，围绕{leading_topic}等高频领域建立专题治理台账，对重复点位、重复主体、重复事项进行归并分析。第二，对回复内容进行结构化复核，重点识别核查、整改、解释、转办、回访五类动作是否完整。第三，推动承办量较高部门形成月度研判机制，把个案办理中反复出现的问题转化为制度优化。第四，在报告生成中持续引入来件内容和部门回复，形成“群众诉求—部门回应—治理建议”的闭环分析。
+
+## 七、数据说明
+
+本报告基于苏州市政府平台居民留言数据生成，统计期为{period}。报告使用结构化统计、主题分类、典型案例抽取和大模型辅助写作形成初稿，结论主要用于内部研判和专题汇报参考。后续如接入更多城市，可在保留苏州专报的基础上增加跨城市比较模块。
+"""
+
+
+def _system_prompt() -> str:
+    return """
+你是城市治理研究人员和政务数据分析报告撰写专家。请撰写一份面向领导汇报和内部决策参考的苏州市居民政策诉求分析报告。
+
+写作要求：
+1. 报告必须聚焦苏州本地治理，成熟、具体、可汇报，不要写成技术 Demo 说明。
+2. 禁止在正文中使用“由于当前样本主要覆盖单一城市”“样本不足”“无法判断全国趋势”“当前 Demo”等削弱报告价值的表述。
+3. 可以在末尾“数据说明”中客观说明数据来源和方法，但不要让限制性说明喧宾夺主。
+4. 必须同时参考“群众来件内容”和“部门回复内容”，形成“问题表现—部门回应—治理研判—工作建议”的闭环。
+5. 案例引用要提炼事实，不要大段复制原文；不要编造不存在的地点、部门、数字或政策。
+6. 语言正式、克制、有判断，避免空泛口号。建议全文 3500-5000 字，Markdown 格式。
+7. 章节必须使用以下结构：总体判断、苏州市居民诉求总体态势、重点议题和典型案例、政府回应和部门办理情况、风险信号和治理短板、工作建议、数据说明。
+""".strip()
+
+
+def _user_prompt(
+    title: str,
+    stats: dict[str, object],
+    period: str,
+    cases: list[Appeal],
+) -> str:
+    return f"""
+请生成报告标题：{title}
+
+统计摘要：
+{_summary_text(stats, period)}
+
+来件类型分布：
+{_ranking_lines(stats.get('types', []), 10) or '暂无'}
+
+一级主题分布：
+{_ranking_lines(stats.get('topics', []), 12) or '暂无'}
+
+细分主题分布：
+{_ranking_lines(stats.get('subtopics') or stats.get('topics', []), 12) or '暂无'}
+
+回复部门分布：
+{_ranking_lines(stats.get('departments', []), 12) or '暂无'}
+
+月度趋势：
+{stats.get('monthly') or '暂无'}
+
+请重点引用以下典型案例。每个案例都包含来件摘要和回复摘要，报告中要体现部门回应，不要只分析投诉本身：
+{_case_lines(cases)}
+
+请按以下 Markdown 结构输出，不要更改标题层级：
+# {title}
+
+## 一、总体判断
+## 二、苏州市居民诉求总体态势
+### 1. 诉求类型结构
+### 2. 热点主题分布
+### 3. 细分议题观察
+## 三、重点议题和典型案例
+## 四、政府回应和部门办理情况
+### 1. 回复效率
+### 2. 部门承办压力
+## 五、风险信号和治理短板
+## 六、工作建议
+## 七、数据说明
+""".strip()
 
 
 def create_report(
@@ -90,93 +313,38 @@ def create_report(
 ) -> Report:
     stats = dashboard_stats(session, province=region.province, city=region.city, start=start, end=end)
     scope = f"{region.province}{region.city}"
-    period = f"{start or '最早数据'}至{end or '最新数据'}"
-    title = f"{scope}居民政策诉求上半年分析报告（{period}）"
-    facts = _facts_as_text(stats, f"{scope}，{period}")
-    topics = _ranking_lines(stats["topics"], 10)
-    subtopics = _ranking_lines(stats.get("subtopics") or stats["topics"], 10)
-    departments = _ranking_lines(stats["departments"], 10)
-    types = _ranking_lines(stats["types"], 6)
+    period = _period_label(stats, start, end)
+    title = f"{scope}居民政策诉求分析报告（{period}）"
+    cases = _representative_cases(session, region, stats, start, end)
+
     llm = DeepSeekService()
     if llm.enabled:
         try:
             content = llm.complete(
-                (
-                    "你是政策研究人员和政务数据分析报告撰写助手。请撰写一份 Markdown 格式的"
-                    "《居民政策诉求上半年分析报告》。请以社会经济学教授、公共治理专家和城市政策顾问的口吻写作，"
-                    "报告对象是城市领导和政策研究部门。报告定位为深度研究报告，语言正式、客观、克制，"
-                    "要做到“有数据、有判断、有解释、有治理含义”，避免只罗列排名或机械复述统计数字。"
-                    "总字数必须控制在 3800 至 4500 字之间；若信息不足，也要在不编造事实的前提下做充分解释性分析。"
-                    "必须严格依据提供的数据，不得编造不存在的城市、城乡、区域、"
-                    "城市层次、案例或建议数量。当前数据主要覆盖单一城市，涉及城乡对比、城市层次对比、"
-                    "东中西东北区域对比时，必须明确说明“当前数据暂不支持完整比较”，只能基于现有城市数据"
-                    "做有限分析。若二级标签、建议语义归并、回复质量语义分析尚不足，也必须说明局限。"
-                    "最重要的格式要求：必须逐字使用用户指定的 Markdown 标题结构，不得新增、删除、改名、"
-                    "合并或调整顺序。摘要虽然写在最前，但内容要像最后提炼全文观点。"
-                    "写作深度要求：每个分析段落都要包含“数据事实 -> 可能原因/机制 -> 治理含义”的逻辑链；"
-                    "不能只写“某类最多、某类其次”。遇到高占比领域，要解释其背后的公共服务供给、城市运行、"
-                    "居民生活成本、基层治理触点或制度协调问题。对城市领导有用的判断要明确，但措辞不能夸大。"
-                ),
-                (
-                    f"报告标题：{title}\n\n"
-                    "请严格按以下结构输出，标题必须逐字一致：\n\n"
-                    f"# {title}\n\n"
-                    "## （一）摘要（约300字）\n\n"
-                    "## （二）居民政策诉求总体分析（约1000字）\n\n"
-                    "### 1. 图1 居民诉求总体分布_一级标签\n\n"
-                    "### 2. 具体分析（约300字）\n\n"
-                    "### 3. 图2 前五大领域详析_二级标签\n\n"
-                    "### 4. 具体分析（约700字）\n\n"
-                    "## （三）不同结构特征分析对比（约1500字）\n\n"
-                    "### 1. 城乡对比（核心，约700字）\n\n"
-                    "### 2. 城市层次（超大城市/约400字）\n\n"
-                    "### 3. 东中西东北（约400字）\n\n"
-                    "## （四）政府回应与诉求办理情况（约1000字）\n\n"
-                    "### 1. 总体分析（约500字）\n\n"
-                    "### 2. 分领域（约500字）\n\n"
-                    "## （五）对策建议（约400字）\n\n"
-                    "## 专栏 问计于民（约500字）\n\n"
-                    "### 1. 图：高共识建议Top榜_语义归并后的具体建议\n\n"
-                    "### 2. 具体分析（约500字）\n\n"
-                    "#### （1）建议总量与领域分布（约80字）\n\n"
-                    "#### （2）高共识建议分析\n\n"
-                    "各部分写作要求：\n"
-                    "（一）摘要约300字，要最后提炼全文观点，不能写成背景介绍；必须包含总体格局、结构特征、政府回应和建议方向。\n"
-                    "（二）2 必须约300字，分析头部领域格局与占比、整体特征定性、本期关键变化；必须说明这些分布对城市治理优先级意味着什么。\n"
-                    "（二）4 必须围绕前五大领域展开，每个领域约140字，写二级议题构成和核心痛点；"
-                    "当前没有稳定二级标签时，要用现有一级标签和留言主题作有限推断，并说明需后续语义归并补齐。"
-                    "每个领域都要写出居民真实关切的政策含义，不能只列数量。\n"
-                    "（三）必须分别写城乡对比、城市层次、东中西东北，但由于当前仅有苏州数据，不得编造全国比较结论，"
-                    "应说明数据限制并写未来接入多城市后的分析口径。即便数据不足，也要写出为什么这些比较对政策研判重要，"
-                    "以及苏州样本能提供哪些有限启示。\n"
-                    "（四）1 必须约500字，写回复比例、回复时长、回复情况，并说明当前尚未完成敷衍/模板化回复的语义质量分析；"
-                    "要分析高回复率和平均回复时长分别说明什么、不能说明什么。\n"
-                    "（四）2 必须写分领域回应快慢；当前没有全国代表城市时，不得编造好坏城市前三，可改为说明当前无法列出，"
-                    "后续多城市数据接入后再排名；可以基于部门承办排行分析办理压力和协同治理问题。\n"
-                    "（五）对策建议约400字，必须从前文问题推出，写成领导可执行的政策建议，避免空泛口号。\n"
-                    "专栏必须约500字，包含建议总量与领域分布、高共识建议分析；当前未完成语义归并时要说明，"
-                    "但仍需解释“问计于民”对识别共性治理需求的价值。\n"
-                    "请避免以下写法：不要连续堆砌排行；不要每段都以“数据显示”开头；不要使用过度学术化术语；"
-                    "不要虚构代表城市、案例、二级标签、语义归并结果或回复质量结论。\n\n"
-                    f"统计摘要：\n{facts}\n\n"
-                    f"一级主题排行：\n{topics or '暂无主题排行'}\n\n"
-                    f"二级主题排行：\n{subtopics or '暂无二级主题排行'}\n\n"
-                    f"来件类型分布：\n{types or '暂无来件类型'}\n\n"
-                    f"回复部门排行：\n{departments or '暂无部门排行'}\n\n"
-                    "二级标签说明：当前系统已接入一级-二级标签体系。若某些数据仍缺少二级标签，"
-                    "请说明可能是历史数据尚未重分类，并基于已有二级主题排行做有限分析。\n"
-                    "结构对比说明：当前仅有苏州市数据，不具备全国城乡、城市层次、东中西东北区域比较条件。"
-                    "请在对应章节中明确这一限制，并给出后续扩展方向。\n"
-                    "问计于民说明：当前可先基于来件类型中的建议类线索进行有限分析，不要虚构具体建议数量。"
-                ),
+                _system_prompt(),
+                _user_prompt(title, stats, period, cases),
+                timeout=300,
+                max_tokens=9000,
             )
-            generated_by = llm.model_name
-        except Exception:
-            content = _local_report(title, facts, stats)
-            generated_by = "local-template (AI fallback)"
+            generated_by = f"{llm.model_name} + suzhou-report-rag"
+        except Exception as exc:
+            logger.exception("AI report generation failed; retrying with compact evidence.")
+            compact_cases = cases[:8]
+            try:
+                content = llm.complete(
+                    _system_prompt(),
+                    _user_prompt(title, stats, period, compact_cases),
+                    timeout=300,
+                    max_tokens=7500,
+                )
+                generated_by = f"{llm.model_name} + suzhou-report-rag (compact retry)"
+            except Exception as retry_exc:
+                logger.exception("AI report compact retry failed; using local report template.")
+                content = _local_report(title, stats, period, cases)
+                generated_by = f"local-suzhou-template (AI fallback: {type(retry_exc).__name__})"
     else:
-        content = _local_report(title, facts, stats)
-        generated_by = "local-template"
+        content = _local_report(title, stats, period, cases)
+        generated_by = "local-suzhou-template"
 
     report = Report(
         region_id=region.id,
