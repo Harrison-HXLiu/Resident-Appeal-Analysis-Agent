@@ -1,76 +1,275 @@
 {% extends "base.html" %}
-{% block title %}数据管理 - {{ app_name }}{% endblock %}
+{% block title %}数据治理 - {{ app_name }}{% endblock %}
 {% block content %}
 <section class="hero compact">
     <div>
-        <p class="eyebrow">DATA MANAGEMENT</p>
-        <h1>数据管理与 AI 标注</h1>
-        <p class="muted">上传新城市 Excel 后可复用同一分析流程。发往模型的留言使用脱敏文本。</p>
+        <p class="eyebrow">DATA GOVERNANCE</p>
+        <h1>数据导入与季度快照</h1>
+        <p class="muted">原始文件不可变归档，导入后完成字段映射、脱敏、类型归一、去重、标签和回复质量分析。</p>
     </div>
 </section>
 {% if message %}<div class="notice">{{ message }}</div>{% endif %}
-<section class="management-grid">
-    <form class="panel query-form" action="/data/import" method="post" enctype="multipart/form-data">
-        <h2>导入 Excel</h2>
-        <label>文件<input type="file" name="file" accept=".xlsx" required></label>
-        <div class="inline-fields">
-            <label>省份<input type="text" name="province" value="江苏省" required></label>
-            <label>城市<input type="text" name="city" value="苏州市" required></label>
-            <label>区县<input type="text" name="district"></label>
-        </div>
-        <button type="submit">导入数据</button>
-        <p class="hint">要求包含：来件时间、回复时间、来件类型、来件标题、来件内容、回复部门、回复内容；推荐包含信件编号。</p>
-    </form>
-    <form class="panel query-form" action="/data/annotate" method="post">
-        <h2>DeepSeek 主题复核</h2>
-        <label>城市
-            <select name="city">
-                {% for region in regions %}<option value="{{ region.city }}">{{ region.city }}</option>{% endfor %}
-            </select>
-        </label>
-        <label>本次处理条数
-            <input type="number" name="limit" min="1" max="200" value="20">
-        </label>
-        <button type="submit" {% if not llm_enabled %}disabled{% endif %}>运行 AI 复核</button>
-        {% if not llm_enabled %}
-        <p class="hint warning">请先在 `.env` 中配置 `DEEPSEEK_API_KEY` 后重启应用。</p>
-        {% else %}
-        <p class="hint">为控制费用，单次最多复核 200 条，可重复运行直到覆盖需要的数据。</p>
-        {% endif %}
-    </form>
-</section>
-<section class="panel table-panel">
-    <h2>导入记录</h2>
-    <table>
-        <thead><tr><th>时间</th><th>文件</th><th>行数</th><th>新增</th><th>更新</th><th>状态</th></tr></thead>
-        <tbody>
-        {% for batch in batches %}
-        <tr>
-            <td>{{ batch.imported_at.strftime("%Y-%m-%d %H:%M") }}</td>
-            <td>{{ batch.source_filename }}</td>
-            <td>{{ batch.row_count }}</td>
-            <td>{{ batch.inserted_count }}</td>
-            <td>{{ batch.updated_count }}</td>
-            <td>{{ batch.status }}</td>
-        </tr>
-        {% else %}<tr><td colspan="6">暂无导入记录。</td></tr>{% endfor %}
-        </tbody>
-    </table>
-</section>
-<section class="panel table-panel">
-    <h2>AI 任务记录</h2>
-    <table>
-        <thead><tr><th>时间</th><th>任务</th><th>状态</th><th>成功</th><th>失败</th><th>信息</th></tr></thead>
-        <tbody>
-        {% for job in jobs %}
-        <tr>
-            <td>{{ job.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
-            <td>{{ job.job_type }}</td><td>{{ job.status }}</td>
-            <td>{{ job.processed_count }}</td><td>{{ job.failed_count }}</td><td>{{ job.message }}</td>
-        </tr>
-        {% else %}<tr><td colspan="6">暂无任务。</td></tr>{% endfor %}
-        </tbody>
-    </table>
-</section>
-{% endblock %}
 
+<section class="management-grid">
+    <article class="panel">
+        <div class="panel-heading compact-heading">
+            <div><p class="section-kicker">IMPORT BATCH</p><h2>导入来源文件</h2></div>
+            <span>支持 Excel / CSV / Parquet</span>
+        </div>
+        <form action="/data/import" method="post" enctype="multipart/form-data" class="data-form">
+            <div class="form-grid">
+                <label>省份<input name="province" placeholder="江苏省" required></label>
+                <label>归属地级市<input name="city" placeholder="苏州市" required></label>
+                <label>区县<input name="district" placeholder="可选"></label>
+                <label>来源平台编码<input name="source_platform_code" placeholder="建议稳定唯一"></label>
+                <label>来源平台名称<input name="source_platform_name" placeholder="例如：市长信箱"></label>
+                <label>地级市行政码<input name="city_code" placeholder="例如：320500"></label>
+                <label>区县行政码<input name="district_code" placeholder="城乡分析需要"></label>
+                <label>数据文件<input name="file" type="file" accept=".xlsx,.xls,.csv,.parquet" required></label>
+            </div>
+            <button type="submit">创建导入任务</button>
+        </form>
+    </article>
+
+    <article class="panel">
+        <div class="panel-heading compact-heading">
+            <div><p class="section-kicker">QUARTER SNAPSHOT</p><h2>冻结季度快照</h2></div>
+            <span>Parquet + 聚合 + 检索索引</span>
+        </div>
+        <form id="snapshot-form" class="data-form">
+            <label>季度
+                <select id="snapshot-quarter" required>
+                    {% for item in quarters %}<option value="{{ item }}">{{ item }}</option>{% endfor %}
+                </select>
+            </label>
+            <button type="submit">构建新版本</button>
+            <p class="hint">构建完成后才会原子切换为活动版本；已有报告仍固定到原快照。</p>
+        </form>
+        <p class="notice" id="snapshot-message" hidden></p>
+        <div class="taxonomy-gate">
+            <strong>标签发布门槛</strong>
+            <p>{{ taxonomy.version if taxonomy else "未初始化" }} · {{ taxonomy.status if taxonomy else "unknown" }}</p>
+            <p>黄金样本 {{ taxonomy.gold_sample_size if taxonomy else 0 }} / 1500；一级F1 {{ taxonomy.l1_macro_f1 if taxonomy and taxonomy.l1_macro_f1 is not none else "待评估" }}；二级F1 {{ taxonomy.l2_macro_f1 if taxonomy and taxonomy.l2_macro_f1 is not none else "待评估" }}</p>
+        </div>
+    </article>
+</section>
+
+<section class="panel table-panel taxonomy-review">
+    <div class="panel-heading compact-heading">
+        <div><p class="section-kicker">TAXONOMY REVIEW</p><h2>标签评审与冻结</h2></div>
+        <span>{{ taxonomy_labels|selectattr("level", "equalto", 1)|list|length }}个一级项</span>
+    </div>
+    <form id="taxonomy-metrics" class="form-grid taxonomy-metrics">
+        <span>已定稿黄金样本：{{ taxonomy.gold_sample_size }}</span>
+        <span>一级宏平均F1：{{ taxonomy.l1_macro_f1 if taxonomy.l1_macro_f1 is not none else "待评估" }}</span>
+        <span>二级宏平均F1：{{ taxonomy.l2_macro_f1 if taxonomy.l2_macro_f1 is not none else "待评估" }}</span>
+        <button type="submit">从黄金样本重新计算</button>
+        <button type="button" class="button secondary" id="publish-taxonomy">冻结并发布版本</button>
+    </form>
+    <p class="notice" id="taxonomy-message" hidden></p>
+    <details>
+        <summary>展开标签逐项评审（一级需定义边界；二级需批准或拒绝）</summary>
+        <div class="taxonomy-label-list">
+            {% for label in taxonomy_labels %}
+            <form class="taxonomy-label-row" data-label-id="{{ label.id }}">
+                <span class="taxonomy-level">L{{ label.level }}</span>
+                <input name="name" value="{{ label.name }}" aria-label="标签名称">
+                <textarea name="definition" rows="2" aria-label="边界定义">{{ label.definition }}</textarea>
+                <select name="status" aria-label="评审状态">
+                    {% for state in ["trial", "candidate", "approved", "rejected"] %}
+                    <option value="{{ state }}" {% if label.status == state %}selected{% endif %}>{{ state }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="button secondary">保存</button>
+            </form>
+            {% endfor %}
+        </div>
+    </details>
+</section>
+
+<section class="panel table-panel taxonomy-review">
+    <div class="panel-heading compact-heading">
+        <div><p class="section-kicker">GOLD STANDARD</p><h2>双人标注与分歧仲裁</h2></div>
+        <span>待首标 {{ gold_status_counts.get("pending", 0) }} · 待复标 {{ gold_status_counts.get("second_pending", 0) }} · 待仲裁 {{ gold_status_counts.get("disputed", 0) }}</span>
+    </div>
+    <form id="gold-create" class="form-grid">
+        <label>加入黄金样本的留言ID
+            <textarea id="gold-appeal-ids" rows="2" placeholder="例如：101, 102, 103"></textarea>
+        </label>
+        <button type="submit">加入标注队列</button>
+        <p class="hint">这里只使用脱敏正文；同一人员不能完成两次独立标注，仲裁人不能是原两名标注人。</p>
+    </form>
+    <p class="notice" id="gold-message" hidden></p>
+    <div class="taxonomy-label-list gold-queue">
+        {% for sample in gold_queue %}
+        <form class="taxonomy-label-row gold-row" data-sample-id="{{ sample.id }}" data-status="{{ sample.status }}">
+            <span class="taxonomy-level">#{{ sample.id }} · {{ sample.status }}</span>
+            <div>
+                <strong>{{ sample.appeal.external_id }}</strong>
+                <p>{{ sample.appeal.redacted_title }}</p>
+                <p class="hint">{{ sample.appeal.redacted_content[:300] }}</p>
+            </div>
+            <input name="annotator_name" placeholder="开发模式填写标注人姓名">
+            <select name="l1_label_id" class="gold-l1" aria-label="一级标签" required>
+                <option value="">选择一级标签</option>
+                {% for label in taxonomy_l1_labels %}
+                <option value="{{ label.id }}">{{ label.name }}</option>
+                {% endfor %}
+            </select>
+            <select name="l2_label_id" class="gold-l2" aria-label="二级标签">
+                <option value="">不选二级标签</option>
+                {% for label in taxonomy_l2_labels %}
+                <option value="{{ label.id }}" data-parent="{{ label.parent_id }}">{{ label.name }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit">{{ "提交仲裁" if sample.status == "disputed" else "提交独立标注" }}</button>
+        </form>
+        {% else %}
+        <p class="empty-state">当前没有待标注或待仲裁样本。</p>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="panel table-panel">
+    <div class="panel-heading compact-heading"><h2>后台任务</h2><span>单工作器顺序执行</span></div>
+    <table>
+        <thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>处理/失败</th><th>时间</th><th>信息</th></tr></thead>
+        <tbody>
+            {% for job in jobs %}
+            <tr data-job-id="{{ job.public_id }}">
+                <td><code>{{ job.public_id[:8] }}</code></td>
+                <td>{{ job.job_type }}</td>
+                <td><span class="status {{ job.status }}">{{ job.status }}</span></td>
+                <td>{{ job.progress }}%</td>
+                <td>{{ job.processed_count }} / {{ job.failed_count }}</td>
+                <td>{{ job.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                <td>{{ job.message[:120] }}</td>
+            </tr>
+            {% else %}<tr><td colspan="7">暂无任务。</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="panel table-panel">
+    <div class="panel-heading compact-heading"><h2>季度快照</h2><span>历史版本不可原地修改</span></div>
+    <table>
+        <thead><tr><th>季度</th><th>版本</th><th>状态</th><th>原始行</th><th>去重事件</th><th>标签版本</th><th>激活时间</th></tr></thead>
+        <tbody>
+            {% for item in snapshots %}
+            <tr>
+                <td>{{ item.quarter }}</td><td>v{{ item.version }}</td>
+                <td><span class="status {{ item.status }}">{{ item.status }}</span></td>
+                <td>{{ item.row_count }}</td><td>{{ item.canonical_count }}</td>
+                <td>{{ item.taxonomy_version_id or "未绑定" }}</td>
+                <td>{{ item.activated_at.strftime("%Y-%m-%d %H:%M") if item.activated_at else "—" }}</td>
+            </tr>
+            {% else %}<tr><td colspan="7">尚未构建季度快照。</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="panel table-panel">
+    <div class="panel-heading compact-heading"><h2>导入批次</h2><span>{{ batches|length }}条最近记录</span></div>
+    <table>
+        <thead><tr><th>文件</th><th>地区</th><th>状态</th><th>总行数</th><th>新增</th><th>更新</th><th>坏行</th><th>导入时间</th></tr></thead>
+        <tbody>
+            {% for batch in batches %}
+            <tr>
+                <td>{{ batch.source_filename }}</td>
+                <td>{{ batch.region.province }} {{ batch.region.city }} {{ batch.region.district }}</td>
+                <td><span class="status {{ batch.status }}">{{ batch.status }}</span></td>
+                <td>{{ batch.row_count }}</td><td>{{ batch.inserted_count }}</td><td>{{ batch.updated_count }}</td><td>{{ batch.error_count }}</td>
+                <td>{{ batch.imported_at.strftime("%Y-%m-%d %H:%M") }}</td>
+            </tr>
+            {% else %}<tr><td colspan="8">暂无导入批次。</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<script>
+const taxonomyMessage = document.getElementById("taxonomy-message");
+document.querySelectorAll(".taxonomy-label-row").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = Object.fromEntries(new FormData(form));
+        const response = await fetch(`/api/taxonomy/labels/${form.dataset.labelId}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        taxonomyMessage.hidden = false;
+        taxonomyMessage.textContent = response.ok ? `已保存：${data.name}` : (data.detail || "保存失败");
+    });
+});
+document.getElementById("taxonomy-metrics").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const response = await fetch("/api/taxonomy/{{ taxonomy.id }}/metrics", {
+        method: "PUT",
+    });
+    const data = await response.json();
+    taxonomyMessage.hidden = false;
+    taxonomyMessage.textContent = response.ok
+        ? (data.publishable ? "指标已达门槛；请确认全部标签边界后发布。" : `尚不可发布：${data.failures.join("；")}`)
+        : (data.detail || "保存失败");
+});
+document.getElementById("gold-create").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const ids = document.getElementById("gold-appeal-ids").value
+        .split(/[,，\\s]+/).filter(Boolean).map(Number).filter(Number.isInteger);
+    const response = await fetch("/api/taxonomy/{{ taxonomy.id }}/gold-samples", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appeal_ids: ids }),
+    });
+    const data = await response.json();
+    const message = document.getElementById("gold-message");
+    message.hidden = false;
+    message.textContent = response.ok ? `已加入${data.created_count}条样本，刷新页面开始标注。` : (data.detail || "创建失败");
+});
+document.querySelectorAll(".gold-l1").forEach((select) => {
+    select.addEventListener("change", () => {
+        const form = select.closest(".gold-row");
+        form.querySelectorAll(".gold-l2 option[data-parent]").forEach((option) => {
+            option.hidden = option.dataset.parent !== select.value;
+        });
+        form.querySelector(".gold-l2").value = "";
+    });
+    select.dispatchEvent(new Event("change"));
+});
+document.querySelectorAll(".gold-row").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = Object.fromEntries(new FormData(form));
+        payload.l1_label_id = Number(payload.l1_label_id);
+        payload.l2_label_id = payload.l2_label_id ? Number(payload.l2_label_id) : null;
+        const action = form.dataset.status === "disputed" ? "arbitrate" : "annotations";
+        const response = await fetch(`/api/taxonomy/{{ taxonomy.id }}/gold-samples/${form.dataset.sampleId}/${action}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        const message = document.getElementById("gold-message");
+        message.hidden = false;
+        message.textContent = response.ok ? `样本#${form.dataset.sampleId}已提交，当前状态：${data.status}` : (data.detail || "提交失败");
+        if (response.ok) form.remove();
+    });
+});
+document.getElementById("publish-taxonomy").addEventListener("click", async () => {
+    if (!confirm("确认一级名称和边界、二级候选及黄金样本指标均已完成人工复核？")) return;
+    const response = await fetch("/api/taxonomy/{{ taxonomy.id }}/publish", { method: "POST" });
+    const data = await response.json();
+    taxonomyMessage.hidden = false;
+    taxonomyMessage.textContent = response.ok ? "标签版本已冻结发布。" : (data.detail || "发布失败");
+});
+document.getElementById("snapshot-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const message = document.getElementById("snapshot-message");
+    const quarter = document.getElementById("snapshot-quarter").value;
+    const response = await fetch("/api/snapshots", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quarter })
+    });
+    const data = await response.json();
+    message.hidden = false;
+    message.textContent = response.ok ? `已创建快照任务：${data.id}` : (data.detail || "创建失败");
+});
+</script>
+{% endblock %}

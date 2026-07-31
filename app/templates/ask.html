@@ -1,236 +1,233 @@
 {% extends "base.html" %}
-{% block title %}智能问答 - {{ app_name }}{% endblock %}
+{% block title %}分析对话 - {{ app_name }}{% endblock %}
 {% block content %}
 <section class="hero compact">
     <div>
-        <p class="eyebrow">ANALYST AGENT</p>
-        <h1>向数据提问</h1>
-        <p class="muted">回答会注明数据范围。未配置 DeepSeek 时仍可返回基础统计事实。</p>
+        <p class="eyebrow">VERIFIABLE RESEARCH CHAT</p>
+        <h1>向全国留言数据提问</h1>
+        <p class="muted">支持连续追问。数字由分析工具计算，案例和政策均显示可追溯来源；会话超时后自动删除。</p>
     </div>
 </section>
+
 <section class="chat-layout">
-    <form class="panel query-form" method="post" id="ask-form">
-        <label>问题
-            <textarea name="question" rows="5" required placeholder="例如：苏州民众投诉最多的方面是什么？">{{ question }}</textarea>
+    <aside class="panel query-form chat-controls">
+        <div class="panel-heading compact-heading">
+            <div>
+                <p class="section-kicker">ANALYSIS SCOPE</p>
+                <h2>当前分析范围</h2>
+            </div>
+            <button type="button" class="button secondary small-button" id="new-chat">新会话</button>
+        </div>
+        <label>城市
+            <select id="chat-city">
+                <option value="">全国</option>
+                {% for region in regions %}
+                {% set city_name = region.prefecture_city or region.city %}
+                <option value="{{ city_name }}">{{ region.province }} {{ city_name }}</option>
+                {% endfor %}
+            </select>
         </label>
-        <div class="inline-fields">
-            <label>城市
-                <select name="city">
-                    {% for region in regions %}
-                    <option value="{{ region.city }}" {% if selected_city == region.city %}selected{% endif %}>{{ region.city }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label>起始日期<input type="date" name="start" value="{{ start or '' }}"></label>
-            <label>结束日期<input type="date" name="end" value="{{ end or '' }}"></label>
-        </div>
-        <button type="submit">开始分析</button>
+        <label>季度
+            <select id="chat-quarter">
+                <option value="">全部时期</option>
+                {% for item in quarters %}
+                <option value="{{ item }}" {% if item == selected_quarter %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>一级主题
+            <select id="chat-topic">
+                <option value="">全部主题</option>
+                {% for item in topics %}<option value="{{ item }}">{{ item }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>留言类型
+            <select id="chat-type">
+                <option value="">全部类型</option>
+                {% for item in ["投诉", "咨询", "建议", "求助", "表扬", "其他"] %}
+                <option value="{{ item }}">{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
         <div class="examples">
-            <span>示例问题</span>
-            <p>苏州民众反映最多的主题是什么？回复办理情况如何？</p>
-            <p>2025 年留言热点有哪些？请简要总结。</p>
+            <span>可以这样问</span>
+            <button type="button" class="example-question">2025年第四季度全国居民最关注哪些问题？</button>
+            <button type="button" class="example-question">比较苏州和杭州的物业诉求及回复质量。</button>
+            <button type="button" class="example-question">这些问题有哪些可核验的典型案例？</button>
         </div>
-    </form>
-    <article class="panel answer">
+        <p class="session-note" id="session-note">正在创建临时会话…</p>
+    </aside>
+
+    <article class="panel conversation-panel">
         <header class="answer-header">
             <div>
-                <p class="section-kicker">ANALYSIS</p>
-                <h2>分析结果</h2>
+                <p class="section-kicker">RESEARCH ASSISTANT</p>
+                <h2>可追溯分析</h2>
             </div>
-            <div
-                class="analysis-progress {% if answer %}is-complete{% else %}is-idle{% endif %}"
-                id="analysis-progress"
-                aria-live="polite"
-            >
+            <div class="analysis-progress is-idle" id="analysis-progress" aria-live="polite">
                 <span class="progress-ring" aria-hidden="true"></span>
-                <div>
-                    <strong id="analysis-progress-title">{% if answer %}思考完成{% else %}思考中{% endif %}</strong>
-                    <small id="analysis-progress-detail">
-                        {% if answer %}模型分析已完成{% else %}模型正在分析数据{% endif %}
-                    </small>
-                </div>
+                <div><strong id="progress-title">准备中</strong><small id="progress-detail">正在连接分析工具</small></div>
             </div>
         </header>
-        <div id="answer-body">
-            {% if answer %}
-            <p class="source">生成来源：{{ answer_source }}</p>
-            <article class="markdown-answer">{{ answer_html | safe }}</article>
-            {% if rag_evidence %}
-            <section class="rag-sources">
-                <h3>检索依据</h3>
-                <p class="source">
-                    匹配候选 {{ rag_evidence.candidate_count }} 条，
-                    语义候选 {{ rag_evidence.embedding_candidate_count }} 条，
-                    过滤后高相关 {{ rag_evidence.relevant_count }} 条，
-                    送入模型 {{ rag_evidence.selected_sources|length }} 条代表案例。
-                </p>
-                {% for item in rag_evidence.selected_sources %}
-                <details class="source-card" {% if loop.index <= 3 %}open{% endif %}>
-                    <summary>
-                        <strong>[{{ item.rank }}] {{ item.title }}</strong>
-                        <span>{{ item.received_at }} · {{ item.topic }} · {{ item.department }}</span>
-                    </summary>
-                    <p><b>信件编号：</b>{{ item.external_id }}</p>
-                    <p><b>命中字段：</b>{{ item.matched_fields|join("、") if item.matched_fields else "综合相关" }}</p>
-                    <p><b>来件摘要：</b>{{ item.content_excerpt }}</p>
-                    <p><b>回复摘要：</b>{{ item.reply_excerpt or "暂无回复摘要" }}</p>
-                </details>
-                {% endfor %}
-            </section>
-            {% endif %}
-            {% else %}
-            <div class="empty">填写问题后，结果将在此显示。</div>
-            {% endif %}
+        <div class="conversation" id="conversation">
+            <div class="chat-empty">
+                <strong>从一个研究问题开始</strong>
+                <p>我会先显示理解到的统计范围，再给出数字、比较和代表性证据。</p>
+            </div>
         </div>
+        <form id="chat-form" class="chat-composer">
+            <textarea id="question" rows="3" required placeholder="输入研究问题；可在下一轮继续追问或修改范围"></textarea>
+            <button type="submit">发送问题</button>
+        </form>
     </article>
 </section>
+
 <script>
-    const askForm = document.getElementById("ask-form");
-    const progress = document.getElementById("analysis-progress");
-    const progressTitle = document.getElementById("analysis-progress-title");
-    const progressDetail = document.getElementById("analysis-progress-detail");
-    const answerBody = document.getElementById("answer-body");
+let chatId = null;
+let busy = false;
+const conversation = document.getElementById("conversation");
+const form = document.getElementById("chat-form");
+const questionInput = document.getElementById("question");
+const progress = document.getElementById("analysis-progress");
+const progressTitle = document.getElementById("progress-title");
+const progressDetail = document.getElementById("progress-detail");
+const sessionNote = document.getElementById("session-note");
 
-    if (askForm && progress) {
-        askForm.addEventListener("submit", async (event) => {
-            if (!window.fetch || !window.ReadableStream || !window.TextDecoder) {
-                return;
-            }
-            event.preventDefault();
-            const submitButton = askForm.querySelector('button[type="submit"]');
-            progress.classList.remove("is-idle", "is-complete");
-            progress.classList.add("is-thinking");
-            progressTitle.textContent = "思考中";
-            progressDetail.textContent = "模型正在分析数据，请稍候。";
-            if (submitButton) {
-                submitButton.disabled = true;
-                submitButton.textContent = "分析中";
-            }
-
-            const source = document.createElement("p");
-            source.className = "source";
-            source.textContent = "生成来源：正在生成";
-            const answer = document.createElement("article");
-            answer.className = "markdown-answer is-streaming";
-            answer.setAttribute("aria-live", "polite");
-            answerBody.replaceChildren(source, answer);
-
-            try {
-                const response = await fetch("/api/ask/stream", {
-                    method: "POST",
-                    body: new FormData(askForm),
-                });
-                if (!response.ok || !response.body) {
-                    askForm.submit();
-                    return;
-                }
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = "";
-
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) {
-                        break;
-                    }
-                    buffer += decoder.decode(value, { stream: true });
-                    const events = buffer.split("\n\n");
-                    buffer = events.pop() || "";
-                    for (const item of events) {
-                        handleStreamEvent(item, source, answer);
-                    }
-                }
-                if (buffer.trim()) {
-                    handleStreamEvent(buffer, source, answer);
-                }
-            } catch (error) {
-                askForm.submit();
-            } finally {
-                if (submitButton) {
-                    submitButton.disabled = false;
-                    submitButton.textContent = "开始分析";
-                }
-            }
+function scope() {
+    return {
+        city: document.getElementById("chat-city").value,
+        quarter: document.getElementById("chat-quarter").value,
+        topic_l1: document.getElementById("chat-topic").value,
+        appeal_type: document.getElementById("chat-type").value,
+    };
+}
+function setProgress(title, detail, complete = false) {
+    progress.className = `analysis-progress ${complete ? "is-complete" : "is-thinking"}`;
+    progressTitle.textContent = title;
+    progressDetail.textContent = detail;
+}
+function addMessage(role, text = "") {
+    const wrapper = document.createElement("section");
+    wrapper.className = `chat-message ${role}`;
+    const label = document.createElement("span");
+    label.textContent = role === "user" ? "你的问题" : "分析助手";
+    const body = document.createElement("article");
+    body.className = role === "assistant" ? "markdown-answer is-streaming" : "";
+    body.textContent = text;
+    wrapper.append(label, body);
+    if (conversation.querySelector(".chat-empty")) conversation.replaceChildren();
+    conversation.append(wrapper);
+    wrapper.scrollIntoView({ behavior: "smooth", block: "end" });
+    return body;
+}
+function addEvidence(items) {
+    if (!items?.length) return;
+    const section = document.createElement("section");
+    section.className = "chat-evidence";
+    const title = document.createElement("h3");
+    title.textContent = "本轮证据";
+    section.append(title);
+    items.forEach((item) => {
+        const details = document.createElement("details");
+        details.className = "source-card";
+        const summary = document.createElement("summary");
+        const sourceLabel = { policy: "政策", report: "报告", appeal: "案例" }[item.source_type] || "证据";
+        summary.textContent = `[${sourceLabel}:${item.source_id}] ${item.title}`;
+        const meta = document.createElement("p");
+        meta.textContent = [item.city, item.quarter, item.topic, item.department].filter(Boolean).join(" · ");
+        const excerpt = document.createElement("p");
+        excerpt.textContent = item.excerpt || "";
+        details.append(summary, meta, excerpt);
+        if (item.reply_excerpt) {
+            const reply = document.createElement("p");
+            reply.textContent = `回复摘要：${item.reply_excerpt}`;
+            details.append(reply);
+        }
+        section.append(details);
+    });
+    conversation.append(section);
+}
+async function createSession() {
+    if (chatId) {
+        fetch(`/api/chat/sessions/${chatId}`, { method: "DELETE", keepalive: true }).catch(() => {});
+    }
+    const response = await fetch("/api/chat/sessions", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(scope())
+    });
+    if (!response.ok) throw new Error("无法创建会话");
+    const data = await response.json();
+    chatId = data.id;
+    conversation.innerHTML = '<div class="chat-empty"><strong>从一个研究问题开始</strong><p>本会话不会进入长期历史，超时后自动清理。</p></div>';
+    sessionNote.textContent = "临时会话已建立 · {{ session_timeout_minutes }}分钟无活动后清理";
+}
+async function handleEvent(raw, assistant) {
+    const lines = raw.split("\n");
+    const event = lines.find((line) => line.startsWith("event: "))?.slice(7);
+    const dataText = lines.find((line) => line.startsWith("data: "))?.slice(6);
+    if (!event || !dataText) return;
+    const data = JSON.parse(dataText);
+    if (event === "status") setProgress(data.title || "分析中", data.detail || "正在处理");
+    if (event === "plan") {
+        const plan = data.query_plan || {};
+        setProgress("已锁定范围", [plan.quarter, plan.city || "全国", plan.topic_l1].filter(Boolean).join(" · "));
+    }
+    if (event === "delta") assistant.textContent += data.text || "";
+    if (event === "reset") assistant.textContent = data.text || "";
+    if (event === "error") throw new Error(data.detail || "分析失败");
+    if (event === "done") {
+        assistant.classList.remove("is-streaming");
+        assistant.innerHTML = data.answer_html || "";
+        addEvidence(data.evidence || []);
+        setProgress("分析完成", `${data.answer_source} · ${data.evidence?.length || 0}条证据`, true);
+    }
+}
+form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const question = questionInput.value.trim();
+    if (!question) return;
+    busy = true;
+    form.querySelector("button").disabled = true;
+    addMessage("user", question);
+    const assistant = addMessage("assistant");
+    questionInput.value = "";
+    try {
+        if (!chatId) await createSession();
+        setProgress("解析问题", "正在确定统计范围");
+        const payload = { question, ...scope() };
+        const response = await fetch(`/api/chat/sessions/${chatId}/messages/stream`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
         });
+        if (!response.ok || !response.body) throw new Error((await response.json()).detail || "请求失败");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split("\n\n");
+            buffer = events.pop() || "";
+            for (const raw of events) await handleEvent(raw, assistant);
+        }
+        if (buffer.trim()) await handleEvent(buffer, assistant);
+    } catch (error) {
+        assistant.textContent = `本轮分析未完成：${error.message}`;
+        setProgress("分析失败", "请检查数据范围后重试");
+    } finally {
+        busy = false;
+        form.querySelector("button").disabled = false;
     }
-
-    function handleStreamEvent(rawEvent, sourceNode, answerNode) {
-        const lines = rawEvent.split("\n");
-        const eventLine = lines.find((line) => line.startsWith("event: "));
-        const dataLine = lines.find((line) => line.startsWith("data: "));
-        if (!eventLine || !dataLine) {
-            return;
-        }
-        const eventName = eventLine.slice(7);
-        const payload = JSON.parse(dataLine.slice(6));
-        if (eventName === "status") {
-            progressTitle.textContent = payload.title || "思考中";
-            progressDetail.textContent = payload.detail || "模型正在分析数据";
-            return;
-        }
-        if (eventName === "delta") {
-            answerNode.textContent += payload.text || "";
-            return;
-        }
-        if (eventName === "reset") {
-            answerNode.textContent = payload.text || "";
-            return;
-        }
-        if (eventName === "done") {
-            progress.classList.remove("is-thinking", "is-idle");
-            progress.classList.add("is-complete");
-            progressTitle.textContent = "思考完成";
-            progressDetail.textContent = "模型分析已完成";
-            sourceNode.textContent = `生成来源：${payload.answer_source}`;
-            answerNode.classList.remove("is-streaming");
-            answerNode.innerHTML = payload.answer_html || "";
-            renderEvidence(payload.rag_evidence);
-        }
-    }
-
-    function renderEvidence(evidence) {
-        if (!evidence || !Array.isArray(evidence.selected_sources) || evidence.selected_sources.length === 0) {
-            return;
-        }
-        const section = document.createElement("section");
-        section.className = "rag-sources";
-        const title = document.createElement("h3");
-        title.textContent = "检索依据";
-        const summary = document.createElement("p");
-        summary.className = "source";
-        summary.textContent = `匹配候选 ${evidence.candidate_count} 条，语义候选 ${evidence.embedding_candidate_count} 条，过滤后高相关 ${evidence.relevant_count} 条，送入模型 ${evidence.selected_sources.length} 条代表案例。`;
-        section.append(title, summary);
-
-        evidence.selected_sources.forEach((item, index) => {
-            const card = document.createElement("details");
-            card.className = "source-card";
-            card.open = index < 3;
-            const summaryNode = document.createElement("summary");
-            const strong = document.createElement("strong");
-            strong.textContent = `[${item.rank}] ${item.title}`;
-            const meta = document.createElement("span");
-            meta.textContent = `${item.received_at} · ${item.topic} · ${item.department}`;
-            summaryNode.append(strong, meta);
-            card.append(summaryNode);
-            addEvidenceLine(card, "信件编号：", item.external_id);
-            addEvidenceLine(
-                card,
-                "命中字段：",
-                item.matched_fields && item.matched_fields.length ? item.matched_fields.join("、") : "综合相关"
-            );
-            addEvidenceLine(card, "来件摘要：", item.content_excerpt);
-            addEvidenceLine(card, "回复摘要：", item.reply_excerpt || "暂无回复摘要");
-            section.append(card);
-        });
-        answerBody.append(section);
-    }
-
-    function addEvidenceLine(card, label, value) {
-        const line = document.createElement("p");
-        const strong = document.createElement("b");
-        strong.textContent = label;
-        line.append(strong, document.createTextNode(value || ""));
-        card.append(line);
-    }
+});
+document.getElementById("new-chat").addEventListener("click", () => createSession().catch(() => {
+    sessionNote.textContent = "会话创建失败，请刷新页面。";
+}));
+document.querySelectorAll(".example-question").forEach((button) => {
+    button.addEventListener("click", () => { questionInput.value = button.textContent.trim(); questionInput.focus(); });
+});
+window.addEventListener("beforeunload", () => {
+    if (chatId) fetch(`/api/chat/sessions/${chatId}`, { method: "DELETE", keepalive: true }).catch(() => {});
+});
+createSession().catch(() => { sessionNote.textContent = "会话创建失败，请刷新页面。"; });
 </script>
 {% endblock %}

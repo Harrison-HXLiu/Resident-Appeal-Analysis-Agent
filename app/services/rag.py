@@ -10,9 +10,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import get_settings
 from app.models import Appeal, AppealAnnotation, AppealChunk, RagAnswerSource, Region, RetrievalLog
-from app.services.embeddings import EmbeddingUnavailable, search_embeddings
-
-
 FTS_TABLE = "appeal_chunks_fts"
 QUERY_STOP_PHRASES = (
     "回复内容",
@@ -290,7 +287,7 @@ def _like_fallback(
         pattern = f"%{token}%"
         target = AppealChunk.reply_excerpt if reply_only else AppealChunk.search_text
         conditions.append(target.like(pattern))
-    statement = statement.where(or_(*conditions)).limit(limit)
+    statement = statement.where(or_(*conditions)).order_by(Appeal.received_at.desc()).limit(limit)
     return [(appeal_id, 0.1) for appeal_id in session.scalars(statement).all()]
 
 
@@ -362,7 +359,7 @@ def search_relevant_appeals(
         FROM {FTS_TABLE} fts
         JOIN appeals a ON a.id = fts.appeal_id
         WHERE {' AND '.join(filters)}
-        ORDER BY (score - field_boost) ASC
+        ORDER BY (score - field_boost) ASC, a.received_at DESC, a.id DESC
         LIMIT ?
     """
     try:
@@ -392,31 +389,10 @@ def hybrid_search_relevant_appeals(
     candidate_limit: int = 80,
 ) -> tuple[list[tuple[int, float]], int, int]:
     fts_results = search_relevant_appeals(session, question, city, start, end, candidate_limit)
-    merged: dict[int, float] = {}
-    for rank, (appeal_id, score) in enumerate(fts_results, start=1):
-        merged[appeal_id] = merged.get(appeal_id, 0) + max(0.0, 1.0 - (rank - 1) / max(candidate_limit, 1))
-
-    embedding_count = 0
-    try:
-        embedding_results = search_embeddings(
-            session,
-            question,
-            city=city,
-            start=start,
-            end=end,
-            top_k=min(40, candidate_limit),
-        )
-        embedding_count = len(embedding_results)
-        for rank, item in enumerate(embedding_results, start=1):
-            rank_score = max(0.0, 1.0 - (rank - 1) / max(len(embedding_results), 1))
-            merged[item.appeal_id] = merged.get(item.appeal_id, 0) + 1.25 * rank_score + item.score
-    except EmbeddingUnavailable:
-        embedding_count = 0
-    except Exception:
-        embedding_count = 0
-
-    ranked = sorted(merged.items(), key=lambda item: item[1], reverse=True)
-    return [(appeal_id, -score) for appeal_id, score in ranked[:candidate_limit]], len(fts_results), embedding_count
+    # Compatibility fallback for development databases without a Tantivy
+    # snapshot. Nationwide production deliberately does not build one vector
+    # per appeal; the main chat path uses BM25 then a bounded reranker.
+    return fts_results[:candidate_limit], len(fts_results), 0
 
 
 def _load_sources(session: Session, scored_ids: list[tuple[int, float]], question: str) -> list[RagSource]:

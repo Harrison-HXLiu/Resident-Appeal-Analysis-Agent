@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 - {{ app_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body class="login-page">
+    <main class="login-card">
+        <div class="brand-mark">RA</div>
+        <p class="eyebrow">SECURE RESEARCH ACCESS</p>
+        <h1>研究平台登录</h1>
+        <p class="muted">居民留言包含敏感信息，请使用分配的研究账号访问。</p>
+        {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+        <form method="post" action="/login">
+            <input type="hidden" name="next" value="{{ next }}">
+            <label>用户名<input name="username" autocomplete="username" required></label>
+            <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+            <button type="submit">登录</button>
+        </form>
+    </main>
+</body>
+</html>

@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}全国诉求地图 - {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero map-hero">
+    <div>
+        <p class="eyebrow">NATIONAL APPEAL MAP</p>
+        <h1>全国城市居民诉求地图</h1>
+        <p class="muted">气泡大小为去重事件量，颜色表示相对上一季度的增速。县市区数据统一归并到所属地级市。</p>
+    </div>
+    <form class="filters" method="get">
+        <label>季度
+            <select name="quarter">
+                {% for item in quarters %}
+                <option value="{{ item }}" {% if item == selected_quarter %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>一级主题
+            <select name="topic_l1">
+                <option value="">全部主题</option>
+                {% for item in topics %}
+                <option value="{{ item }}" {% if item == selected_topic %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>留言类型
+            <select name="ctype">
+                <option value="">全部类型</option>
+                {% for item in ["投诉", "咨询", "建议", "求助", "表扬", "其他"] %}
+                <option value="{{ item }}" {% if item == selected_ctype %}selected{% endif %}>{{ item }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit">更新地图</button>
+    </form>
+</section>
+
+<section class="map-kpis" id="map-kpis">
+    <article><span>统计季度</span><strong>{{ overview.quarter or "暂无" }}</strong></article>
+    <article><span>纳入城市</span><strong>{{ overview.cities|length }}</strong></article>
+    <article><span>后台待确认坐标</span><strong>{{ overview.unmapped_count }}</strong></article>
+    <article><span>统计口径</span><strong class="small-value">去重事件</strong></article>
+</section>
+
+<section class="map-layout">
+    <article class="panel map-panel">
+        <div class="map-toolbar">
+            <div>
+                <p class="section-kicker">CITY HOTSPOTS</p>
+                <h2>城市诉求热度与季度变化</h2>
+            </div>
+            <div class="map-legend">
+                <span><i class="decrease"></i>下降</span>
+                <span><i class="stable"></i>平稳/不可比</span>
+                <span><i class="increase"></i>增长</span>
+            </div>
+        </div>
+        <div id="china-map" class="china-map" role="img" aria-label="全国城市居民诉求气泡地图"></div>
+        <div id="map-fallback" class="map-fallback" hidden>
+            <p>地图底图暂时无法加载，右侧城市列表仍可正常使用。</p>
+        </div>
+    </article>
+
+    <aside class="panel map-summary">
+        <div class="map-summary-heading">
+            <div>
+                <p class="section-kicker">CITY INDEX</p>
+                <h2>已接入地级市</h2>
+            </div>
+            <input id="city-search" type="search" placeholder="搜索城市" aria-label="搜索城市">
+        </div>
+        <div id="city-list" class="city-list"><p class="muted">正在加载城市数据。</p></div>
+    </aside>
+</section>
+
+<script src="/static/vendor/echarts.min.js"></script>
+<script>
+const mapFilters = {
+    quarter: {{ selected_quarter|tojson }},
+    topic_l1: {{ selected_topic|tojson }},
+    ctype: {{ selected_ctype|tojson }},
+};
+const mapElement = document.getElementById("china-map");
+const cityList = document.getElementById("city-list");
+const fallback = document.getElementById("map-fallback");
+let cityRows = [];
+
+function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[char]);
+}
+function number(value) { return Number(value || 0).toLocaleString("zh-CN"); }
+function growthLabel(value) {
+    if (value === null || value === undefined) return "不可比";
+    return `${value > 0 ? "+" : ""}${Number(value).toFixed(1)}%`;
+}
+function growthColor(value) {
+    if (value === null || value === undefined || Math.abs(value) < 3) return "#7d8c91";
+    return value > 0 ? "#c56d3a" : "#247b67";
+}
+function topicRows(items) {
+    if (!items?.length) return '<p class="map-tip-empty">暂无主题数据</p>';
+    const max = Math.max(...items.map((item) => item.count || 0), 1);
+    return items.slice(0, 5).map((item) => `
+        <div class="map-tip-row">
+            <span>${escapeHtml(item.name)}</span>
+            <i><b style="width:${Math.max(6, item.count / max * 100)}%"></b></i>
+            <strong>${number(item.count)}</strong>
+        </div>`).join("");
+}
+function tooltip(city) {
+    return `<div class="map-tip">
+        <h3>${escapeHtml(city.city)}</h3>
+        <div class="map-tip-metrics">
+            <span>去重事件 <b>${number(city.event_count)}</b></span>
+            <span>原始留言 <b>${number(city.raw_count)}</b></span>
+            <span>环比 <b style="color:${growthColor(city.qoq_growth)}">${growthLabel(city.qoq_growth)}</b></span>
+            <span>重复率 <b>${city.duplicate_rate}%</b></span>
+            <span>回复率 <b>${city.response_rate}%</b></span>
+            <span>五项平均达成率 <b>${city.reply_quality_score == null ? "暂无" : `${city.reply_quality_score}%`}</b></span>
+        </div>
+        <p>Top问题</p>${topicRows(city.top_topics)}
+        <em>点击进入城市季度报告</em>
+    </div>`;
+}
+function renderList(rows) {
+    cityList.innerHTML = rows.length ? rows.map((city) => `
+        <a class="city-item" href="${escapeHtml(city.report_url)}">
+            <div><strong>${escapeHtml(city.city)}</strong><span>${escapeHtml(city.province)}</span></div>
+            <b>${number(city.event_count)}</b>
+            <small>环比 ${growthLabel(city.qoq_growth)} · 回复率 ${city.response_rate}%</small>
+            <p>${escapeHtml((city.top_topics || []).slice(0, 3).map((item) => item.name).join("、") || "暂无稳定主题")}</p>
+        </a>`).join("") : '<p class="muted">当前筛选范围暂无已定位城市。</p>';
+}
+document.getElementById("city-search").addEventListener("input", (event) => {
+    const keyword = event.target.value.trim().toLowerCase();
+    renderList(cityRows.filter((item) => !keyword || item.city.toLowerCase().includes(keyword)));
+});
+
+async function initMap() {
+    const query = new URLSearchParams(Object.entries(mapFilters).filter(([, value]) => value));
+    const response = await fetch(`/api/map?${query}`);
+    if (!response.ok) throw new Error("overview unavailable");
+    const overview = await response.json();
+    cityRows = (overview.cities || []).sort((a, b) => b.event_count - a.event_count);
+    renderList(cityRows);
+    if (!window.echarts) throw new Error("echarts unavailable");
+    const [geoResponse, centersResponse] = await Promise.all([
+        fetch("/static/maps/china.json"),
+        fetch("/static/maps/admin-centers.json"),
+    ]);
+    if (!geoResponse.ok) throw new Error("geo unavailable");
+    const geo = await geoResponse.json();
+    const centers = centersResponse.ok ? await centersResponse.json() : [];
+    const centerByCode = new Map(centers.map((item) => [String(item.adcode), item]));
+    const centerByName = new Map(
+        centers.filter((item) => item.level === "city" || item.level === "province")
+            .map((item) => [item.name, item])
+    );
+    echarts.registerMap("china", geo);
+    const chart = echarts.init(mapElement);
+    const data = cityRows.map((city) => {
+        const fallbackCenter = centerByCode.get(String(city.city_code)) || centerByName.get(city.city);
+        const lng = city.lng ?? fallbackCenter?.lng;
+        const lat = city.lat ?? fallbackCenter?.lat;
+        if (lng === undefined || lat === undefined) return null;
+        return {
+            name: city.city,
+            value: [lng, lat, city.event_count],
+            city,
+            itemStyle: { color: growthColor(city.qoq_growth) },
+        };
+    }).filter(Boolean);
+    chart.setOption({
+        tooltip: {
+            trigger: "item", borderWidth: 0, padding: 0, backgroundColor: "transparent",
+            formatter: (params) => params.data?.city ? tooltip(params.data.city) : ""
+        },
+        geo: {
+            map: "china", roam: true, zoom: 1.12,
+            itemStyle: { areaColor: "#eef0ea", borderColor: "#cad3ce", borderWidth: 1 },
+            emphasis: { itemStyle: { areaColor: "#dce9e4" }, label: { color: "#17242a" } }
+        },
+        series: [{
+            type: "scatter", coordinateSystem: "geo", data,
+            symbolSize: (value) => Math.max(8, Math.min(34, 7 + Math.sqrt(value[2] || 1) / 5)),
+            itemStyle: { opacity: .86, shadowBlur: 8, shadowColor: "rgba(23,36,42,.18)" },
+            emphasis: { scale: 1.35 },
+        }]
+    });
+    chart.on("click", (params) => {
+        if (params.data?.city?.report_url) window.location.href = params.data.city.report_url;
+    });
+    window.addEventListener("resize", () => chart.resize());
+}
+initMap().catch(() => {
+    fallback.hidden = false;
+    mapElement.classList.add("is-unavailable");
+});
+</script>
+{% endblock %}

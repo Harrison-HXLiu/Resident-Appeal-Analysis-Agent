@@ -1,32 +1,42 @@
 {% extends "base.html" %}
-{% block title %}报告生成 - {{ app_name }}{% endblock %}
+{% block title %}季度报告 - {{ app_name }}{% endblock %}
 {% block content %}
-<section class="hero compact">
+<section class="hero compact report-hero">
     <div>
-        <p class="eyebrow">REPORT STUDIO</p>
-        <h1>分析报告生成</h1>
-        <p class="muted">基于指定地区与时间范围生成报告；只有导入数据覆盖的地区可选。</p>
+        <p class="eyebrow">QUARTERLY REPORT STUDIO</p>
+        <h1>全国与城市季度报告</h1>
+        <p class="muted">报告先锁定统计事实、案例和政策出处，再生成可编辑草稿；审核发布后方可导出。</p>
     </div>
-    <form class="filters report-form" method="post">
-        <label>地区
-            <select name="region_id" required>
+    <form class="filters report-form" id="report-create-form">
+        <label>报告类型
+            <select id="report-type"><option value="national" {% if not selected_city_code and not selected_city %}selected{% endif %}>全国季度报告</option><option value="city" {% if selected_city_code or selected_city %}selected{% endif %}>城市季度简报</option></select>
+        </label>
+        <label>季度
+            <select id="report-quarter" required>
+                {% for item in quarters %}<option value="{{ item }}" {% if item == selected_quarter %}selected{% endif %}>{{ item }}</option>{% endfor %}
+            </select>
+        </label>
+        <label id="report-city-label">城市
+            <select id="report-city" {% if not selected_city_code and not selected_city %}disabled{% endif %}>
+                <option value="">请选择</option>
                 {% for region in regions %}
-                <option value="{{ region.id }}">{{ region.province }} {{ region.city }}</option>
+                {% set city_name = region.prefecture_city or region.city %}
+                <option value="{{ region.city_code }}" data-city="{{ city_name }}" {% if (selected_city_code and region.city_code == selected_city_code) or (selected_city and city_name == selected_city) %}selected{% endif %}>{{ region.province }} {{ city_name }}</option>
                 {% endfor %}
             </select>
         </label>
-        <label>起始日期<input type="date" name="start"></label>
-        <label>结束日期<input type="date" name="end"></label>
-        <button type="submit">生成报告</button>
+        <button type="submit">生成草稿</button>
     </form>
 </section>
+<p class="notice" id="report-job" hidden></p>
+
 <section class="report-layout">
     <aside class="panel report-list">
-        <h2>历史报告</h2>
+        <div class="panel-heading compact-heading"><h2>报告版本</h2><span>{{ reports|length }}份</span></div>
         {% for item in reports %}
-        <a href="/reports?selected={{ item.id }}" class="{% if report and item.id == report.id %}selected{% endif %}">
-            <strong>{{ item.title }}</strong>
-            <small>{{ item.created_at.strftime("%Y-%m-%d %H:%M") }} · {{ item.generated_by }}</small>
+        <a href="/reports?selected={{ item.public_id }}" class="{% if report and item.id == report.id %}selected{% endif %}">
+            <div class="report-list-title"><strong>{{ item.title }}</strong><span class="status {{ item.status }}">{{ item.status }}</span></div>
+            <small>{{ item.updated_at.strftime("%Y-%m-%d %H:%M") }} · {{ item.generated_by }}</small>
         </a>
         {% else %}
         <p class="muted">尚未生成报告。</p>
@@ -34,15 +44,145 @@
     </aside>
     <article class="panel report-view">
         {% if report %}
-        <div class="panel-heading">
-            <h2>{{ report.title }}</h2>
-            <a class="button secondary" href="/reports/{{ report.id }}/download">下载 Markdown</a>
-        </div>
-        <pre>{{ report.content }}</pre>
+        <header class="report-reader-header">
+            <div>
+                <p class="section-kicker">RESEARCH REPORT · {{ report.status|upper }}</p>
+                <h2>{{ report.title }}</h2>
+                <p class="report-meta">{{ report.quarter }} · {{ report.generated_by }} · 事实快照 {{ report.snapshot_id or "未冻结" }}</p>
+            </div>
+            <div class="report-actions">
+                {% if report.status != "published" %}
+                <button class="button secondary" type="button" id="edit-report">编辑</button>
+                <button type="button" id="publish-report">审核发布</button>
+                {% else %}
+                <a class="button secondary" href="/api/reports/{{ report.public_id }}/export?format=docx">Word</a>
+                <a class="button secondary" href="/api/reports/{{ report.public_id }}/export?format=pdf">PDF</a>
+                {% endif %}
+            </div>
+        </header>
+        {% set report_stats = report.fact_pack.get("statistics", {}) %}
+        {% set topic_rows = report_stats.get("topics", [])[:10] %}
+        {% if topic_rows %}
+        <section class="report-fact-visuals">
+            <div class="report-chart">
+                <h3>图1 一级主题结构（去重事件）</h3>
+                {% set max_topic_count = topic_rows[0].count or 1 %}
+                {% for item in topic_rows %}
+                <div class="report-chart-row">
+                    <span>{{ item.name }}</span>
+                    <i><b style="width:{{ (item.count / max_topic_count * 100)|round(1) }}%"></b></i>
+                    <strong>{{ item.count }}</strong>
+                </div>
+                {% endfor %}
+            </div>
+            {% set quality_rows = report_stats.get("reply_quality_dimensions", []) %}
+            {% if quality_rows %}
+            <div class="report-quality-grid">
+                <h3>回复质量五项</h3>
+                {% for item in quality_rows %}
+                <article>
+                    <span>{{ item.name }}</span>
+                    <strong>{% if item.yes_rate is not none %}{{ item.yes_rate }}%{% else %}暂无{% endif %}</strong>
+                    <small>达成{{ item.yes }} · 未达成{{ item.no }} · 不适用{{ item.not_applicable }} · 未知{{ item.unknown }}</small>
+                </article>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+        <article class="markdown-answer report-content" id="report-content">{{ report_html | safe }}</article>
+        {% if report.status != "published" %}
+        <section class="report-editor" id="report-editor" hidden>
+            <label>报告正文
+                <textarea id="report-text" rows="32">{{ report.current_content }}</textarea>
+            </label>
+            <label>修改说明<input id="change-note" placeholder="例如：补充案例分析并调整建议"></label>
+            <div class="report-actions">
+                <button type="button" id="save-report">保存新版本</button>
+                <button type="button" class="button secondary" id="cancel-edit">取消</button>
+            </div>
+        </section>
+        {% endif %}
         {% else %}
-        <div class="empty">选择范围并生成第一份报告。</div>
+        <div class="empty">生成第一份全国或城市季度报告。</div>
         {% endif %}
     </article>
 </section>
-{% endblock %}
 
+<section class="panel policy-panel">
+    <div class="panel-heading compact-heading">
+        <div><p class="section-kicker">POLICY LIBRARY</p><h2>权威政策材料</h2></div>
+        <span>{{ policies|length }}份有效材料</span>
+    </div>
+    <form action="/api/policies/upload" method="post" enctype="multipart/form-data" class="policy-upload-form">
+        <label>标题<input name="title" required></label>
+        <label>发文机关<input name="issuing_authority"></label>
+        <label>适用地区<input name="applicable_region" value="全国"></label>
+        <label>官方链接<input name="source_url" type="url"></label>
+        <label>政策文件<input name="file" type="file" accept=".pdf,.docx,.txt,.md" required></label>
+        <button type="submit">上传并留档</button>
+    </form>
+</section>
+
+<script>
+const createForm = document.getElementById("report-create-form");
+const typeSelect = document.getElementById("report-type");
+const citySelect = document.getElementById("report-city");
+const jobNotice = document.getElementById("report-job");
+typeSelect.addEventListener("change", () => { citySelect.disabled = typeSelect.value !== "city"; });
+async function pollJob(id) {
+    const response = await fetch(`/api/jobs/${id}`);
+    const job = await response.json();
+    jobNotice.textContent = `任务 ${job.status} · ${job.progress}% ${job.message || ""}`;
+    if (job.status === "completed" && job.result.report_id) {
+        window.location.href = `/reports?selected=${job.result.report_id}`;
+        return;
+    }
+    if (job.status === "failed") return;
+    setTimeout(() => pollJob(id), 1200);
+}
+createForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const option = citySelect.options[citySelect.selectedIndex];
+    if (typeSelect.value === "city" && !option?.dataset.city) {
+        jobNotice.hidden = false; jobNotice.textContent = "城市报告必须选择城市。"; return;
+    }
+    const response = await fetch("/api/reports", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            report_type: typeSelect.value, quarter: document.getElementById("report-quarter").value,
+            city_code: typeSelect.value === "city" ? citySelect.value : "",
+            city: typeSelect.value === "city" ? option.dataset.city : "",
+            policy_ids: {{ policies|map(attribute='id')|list|tojson }}
+        })
+    });
+    const data = await response.json();
+    jobNotice.hidden = false;
+    if (!response.ok) { jobNotice.textContent = data.detail || "创建任务失败"; return; }
+    pollJob(data.id);
+});
+{% if report %}
+const reportId = {{ report.public_id|tojson }};
+const content = document.getElementById("report-content");
+const editor = document.getElementById("report-editor");
+document.getElementById("edit-report")?.addEventListener("click", () => { content.hidden = true; editor.hidden = false; });
+document.getElementById("cancel-edit")?.addEventListener("click", () => { content.hidden = false; editor.hidden = true; });
+document.getElementById("save-report")?.addEventListener("click", async () => {
+    const response = await fetch(`/api/reports/${reportId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: document.getElementById("report-text").value, change_note: document.getElementById("change-note").value })
+    });
+    const data = await response.json();
+    if (!response.ok) { alert(data.detail || "保存失败"); return; }
+    window.location.reload();
+});
+document.getElementById("publish-report")?.addEventListener("click", async () => {
+    if (!confirm("确认数字、案例和政策出处均已复核，并发布当前版本？")) return;
+    const response = await fetch(`/api/reports/${reportId}/publish`, { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) { alert(data.detail || "发布失败"); return; }
+    window.location.reload();
+});
+{% endif %}
+</script>
+{% endblock %}

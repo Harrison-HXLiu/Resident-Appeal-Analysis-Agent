@@ -1,167 +1,208 @@
-# 居民留言分析 Agent Demo
+# 全国居民留言分析平台
 
-这是一个面向政府平台居民留言的分析 demo。当前数据源为 `data/苏州.xlsx`，应用首次启动时会自动导入该文件，并为每条留言生成可解释的初始主题标签。
+面向社会科学研究人员的全国地级市居民留言研究平台。核心能力是：
 
-完整工程原理、文件结构、算法架构和扩展路线见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+- 全国城市气泡地图：去重事件量、季度增速、热点问题和回复指标；
+- 全国季度报告与城市季度简报：事实包锁定、网页编辑、审核发布、Word/PDF导出；
+- 临时多轮分析对话：结构化查询计划、确定性统计、案例/政策证据和流式回答；
+- 数据治理：多来源表头映射、脱敏、类型归一、去重、标签版本、回复质量和季度快照。
 
-## 已实现功能
+当前代码保留 SQLite 作为本地开发兼容层；生产部署使用 PostgreSQL，千万级事实数据按季度写入 Parquet，并由 DuckDB/Tantivy承担离线分析与全文检索。
 
-- 数据概览：留言量、回复率、平均回复耗时、趋势、热点主题和部门排行。
-- 智能问答：以数据库统计为依据回答问题；配置 DeepSeek 后生成自然语言研判回答。
-- RAG 检索增强：问答时会从留言标题、内容和回复中检索相关案例，并把代表性证据提供给模型。
-- 可选 Embedding 语义检索：支持 DashScope `text-embedding-v3`，与 SQLite FTS5 融合排序。
-- 报告生成：按地区和时间生成 Markdown 分析报告并下载。
-- 数据管理：上传新增城市 Excel，记录导入批次，按批运行 DeepSeek 主题复核。
-- 隐私处理：手机号、电话、身份证号、邮箱和显式地址在送往模型前脱敏。
+## 快速启动
 
-当前的主题排行在 AI 复核前使用关键词规则初标，适合演示统计链路，不应直接作为正式治理结论。
+建议使用 Python 3.11 或 3.12：
 
-## 技术结构
-
-```text
-Browser
-  -> FastAPI + Jinja2 + Plotly
-      -> SQLite + SQLAlchemy
-      -> Excel import / redaction / rule annotation
-      -> SQLite FTS5 RAG retrieval
-      -> Optional DashScope embedding retrieval
-      -> DeepSeek API (Q&A, report writing, topic refinement)
-```
-
-数据库模型已包含地区层级和导入批次，因此加入其他城市数据后可沿用相同页面与 API。规模扩大后，可将 `DATABASE_URL` 更换为 PostgreSQL，并将 AI 标注任务迁移到异步任务队列。
-
-## 启动方式
-
-要求 Python 3.11 或更高版本。
-
-```powershell
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload
 ```
 
-本机访问 `http://127.0.0.1:8000`。同一局域网内其他电脑可通过 `http://<运行本应用的电脑IP>:8000` 访问；需要确保 Windows 防火墙允许该端口的入站访问。
+默认访问 `http://127.0.0.1:8000`。若数据库为空且 `AUTO_IMPORT_SAMPLE=true`，系统会导入 `data/` 根目录下的第一个 Excel 样本；不会递归导入全国数据目录。
 
-## 分享到公网
-
-可以让外地用户通过公网访问，但当前 demo 尚无登录鉴权，且本地数据库包含留言原文，不能直接作为公开生产服务发布。
-
-用于短期演示时，可使用 Cloudflare Quick Tunnel 将本机服务临时映射到一个 HTTPS 公网地址：
-
-```powershell
-.\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-cloudflared tunnel --url http://localhost:8000
-```
-
-第二条命令会打印一个随机的 `https://*.trycloudflare.com` 地址，可发给异地访问者。Cloudflare 官方将 Quick Tunnel 定位为测试与开发用途，不承诺生产可用性。
-
-准备持续对外开放时，建议先完成以下工作：
-
-- 增加登录鉴权与管理员权限，将“数据导入”和“AI 标注”限制为管理员访问。
-- 对公开页面只展示汇总指标和脱敏内容，避免原始留言泄露。
-- 部署到云服务器，使用正式域名与 HTTPS，并将数据库迁移到 PostgreSQL。
-- 增加调用额度限制、操作审计、备份和异常监控。
-
-## 配置 DeepSeek
-
-编辑 `.env`：
+没有模型 API 时，地图、统计、报告模板和问答工具仍可运行。配置任意 OpenAI-compatible API：
 
 ```dotenv
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
+MODEL_PROVIDER=openai-compatible
+MODEL_API_KEY=...
+MODEL_BASE_URL=https://api.example.com/v1
+CHAT_MODEL=your-model
 ```
 
-API key 只在后端读取，不会下发给浏览器。未配置 API key 时，仪表盘、导入、规则主题分析、本地问答摘要和模板报告仍可使用。
+旧的 `DEEPSEEK_*` 环境变量仍兼容，但新代码不再将供应商和模型名写死。
 
-## 配置 Embedding 语义检索
+## 全国数据接入
 
-编辑 `.env`，填写阿里 DashScope key：
+先盘点表头、估算行数并发现不完整下载：
 
-```dotenv
-DASHSCOPE_API_KEY=你的_dashscope_key
-EMBEDDING_MODEL=text-embedding-v3
-EMBEDDING_BATCH_SIZE=10
-EMBEDDING_TOP_K=40
+```bash
+python -m app.cli inventory "data/地方政府留言板块爬虫数据汇总"
 ```
 
-安装依赖后，先小批量测试：
+结果默认写入 `instance/source-inventory.json`，包含文件、表头映射、缺失必需字段、城市目录提示和估算行数。
 
-```powershell
-python -m app.cli build-embeddings --limit 20
+导入单个来源：
+
+```bash
+python -m app.cli import path/to/city.xlsx \
+  --province 江苏省 \
+  --city 苏州市 \
+  --platform-code suzhou-mayor-mailbox \
+  --platform-name 苏州市长信箱 \
+  --city-code 320500
 ```
 
-确认无误后全量构建：
+支持 `.xlsx`、`.xls`、`.csv` 和 `.parquet`。至少需要映射出时间和正文，标题缺失时使用正文摘要；常见的“留言时间/来信时间”“内容描述/事项内容”“答复意见/办理结果”等别名已内置。
 
-```powershell
-python -m app.cli build-embeddings
+导入完成并确认城市、区县映射后冻结季度：
+
+```bash
+python -m app.cli snapshot 2025-Q4
 ```
 
-完成后，智能问答会使用“关键词候选 + 语义候选”的混合检索。若未配置 `DASHSCOPE_API_KEY` 或未构建向量索引，系统会自动退回 SQLite FTS5，不影响原有问答。
+快照任务会：
 
-截至 2026-05-25，DeepSeek 官方 API 使用 OpenAI 兼容调用方式，默认模型在本项目中配置为 `deepseek-v4-flash`；模型名称保存在环境变量中，便于后续随官方版本变化调整。
+1. 写入按省份分区、Zstandard压缩的 Parquet；
+2. 在地级市和月份范围内执行 SimHash/LSH 相似留言归组；
+3. 生成地级市季度聚合及主题/类型筛选切片；
+4. 构建 Jieba预分词的 Tantivy/BM25索引；
+5. 使用 DuckDB 复核原始量与去重事件量；
+6. 写入 manifest 后原子激活新版本；
+7. 为全国和有数据的地级市预生成确定性标准报告草稿；
+8. 保留旧版本，历史报告不会随新数据变化。
 
-## 数据格式
+预生成阶段不会调用外部模型，避免一次季度冻结自动产生数百次费用；研究人员需要更完整文字时可再创建模型撰写任务。可用 `PREGENERATE_STANDARD_REPORTS=false` 关闭自动预生成。
 
-上传的 `.xlsx` 文件必须包含以下列：
+## 标签与研究口径
+
+内置标签只是评审初稿：17个业务一级类加“其他/综合”。每条留言保存一个主标签和多个辅助标签，报表按主标签唯一计数。
+
+标签正式发布必须同时满足：
+
+- 双人标注并仲裁的黄金样本不少于1500条；
+- 一级标签宏平均F1不低于0.85；
+- 二级标签宏平均F1不低于0.75；
+- 18个一级标签均有研究团队确认的定义和状态；
+- 每个候选二级标签均已批准或拒绝。
+
+门槛未通过前，页面持续显示“标签试运行”。关键词规则仅提供可解释初标，不能作为研究准确率证明。
+
+数据管理页提供黄金样本队列。每条样本必须由两个不同账号独立提交；第二人提交前看不到第一人的标签。两人一致时自动定稿，不一致时进入第三人仲裁，仲裁人不得是原标注人。黄金样本数和宏平均F1从定稿记录自动重算，不能在页面手工填写。
+
+统计主口径为去重事件量；原始留言量、完全重复和相似组键仍保留。城乡属性只接受行政区映射，无法可靠定位时记为“未知”。
+
+## 对话与报告可信度
+
+对话模型不能生成或执行 SQL。系统先构造受限的 `QueryPlan`，再调用聚合、比较、趋势、回复质量、案例、政策和报告查询工具。
+
+检索流程为：
 
 ```text
-来件时间 | 回复时间 | 来件类型 | 来件标题 | 来件内容 | 回复部门 | 回复内容
+城市/季度/主题过滤
+  -> Tantivy BM25 召回
+  -> 可配置API重排（失败时词法降级）或未来A100重排
+  -> 5–10条脱敏证据
+  -> 模型组织回答
 ```
 
-建议附带 `信件编号` 列，系统会按“地区 + 信件编号”识别唯一留言。如果缺少该列，系统将根据记录内容生成稳定编号。
+会话只在当前浏览器会话中使用，默认30分钟无活动后删除，不提供长期历史列表。
 
-目前已有文件实测为 10,895 条苏州留言，另含 `信件编号` 列；回复时间和回复内容各有 21 条缺失记录，系统会按待完整回复处理。
+报告先生成 `ReportFactPack`，其中锁定：
 
-## 常用操作
+- 快照、标签版本和统计口径；
+- 数字、图表数据和季度比较；
+- 脱敏案例及来源编号；
+- 已上传政策材料及出处。
 
-手动导入文件：
+模型只能根据事实包写正文。校验失败时回退到确定性模板；草稿必须人工审核发布后才能导出 Word/PDF。
+报告不会自动引用政策库中的全部材料；只有创建报告时明确勾选的政策版本才进入事实包和出处校验。
 
-```powershell
-python -m app.cli import .\data\苏州.xlsx --province 江苏省 --city 苏州市
+模型调用记录供应商、模型、提示词版本、耗时和 Token。配置
+`MODEL_INPUT_COST_PER_MILLION`、`MODEL_OUTPUT_COST_PER_MILLION` 后还会记录估算费用；日志不保存提示词正文。
+
+## 生产部署
+
+复制环境变量并设置强密码：
+
+```bash
+export POSTGRES_PASSWORD='...'
+export BOOTSTRAP_ADMIN_USERNAME='...'
+export BOOTSTRAP_ADMIN_PASSWORD='...'
+export APP_DOMAIN='research.example.org'
+docker compose up --build -d
 ```
 
-重建 RAG 检索索引：
+生产配置默认：
 
-```powershell
-python -m app.cli rebuild-rag
+- PostgreSQL持久化业务数据；
+- 单个应用进程和单任务工作器，避免快照并发写入；
+- Caddy自动HTTPS；
+- 账号角色、HttpOnly/SameSite Cookie、登录限速和审计日志；
+- `data/` 以只读卷挂载；
+- 原始文件、快照和导出物写入独立持久卷。
+
+外部云部署应继续通过VPN或IP白名单限制入口，并将 `instance/archive`、`instance/snapshots`、PostgreSQL和导出物备份到对象存储。
+
+## 主要 API
+
+| API | 用途 |
+|---|---|
+| `POST /api/import-batches` | 创建服务器端文件导入任务 |
+| `POST /api/snapshots` | 创建季度快照任务 |
+| `GET /api/jobs/{id}` | 查询任务进度和结果 |
+| `GET /api/map` | 获取地图预聚合数据 |
+| `POST /api/reports` | 创建全国/城市报告任务 |
+| `PUT /api/reports/{id}` | 保存报告新版本 |
+| `POST /api/reports/{id}/publish` | 审核发布 |
+| `GET /api/reports/{id}/export` | 导出已发布Word/PDF |
+| `POST /api/chat/sessions` | 创建临时多轮会话 |
+| `POST /api/chat/sessions/{id}/messages/stream` | SSE流式问答 |
+| `DELETE /api/chat/sessions/{id}` | 清除当前会话 |
+| `POST /api/policies/upload` | 上传并版本化政策材料 |
+| `GET /api/taxonomy` | 查看标签版本和发布门槛 |
+| `PUT /api/taxonomy/labels/{id}` | 审核标签名称、定义、边界和状态 |
+| `POST /api/taxonomy/{id}/publish` | 校验黄金样本、F1和标签审核后冻结版本 |
+| `POST/GET /api/taxonomy/{id}/gold-samples` | 建立和读取脱敏黄金样本队列 |
+| `POST /api/taxonomy/{id}/gold-samples/{sample}/annotations` | 提交双人独立标注 |
+| `POST /api/taxonomy/{id}/gold-samples/{sample}/arbitrate` | 第三人仲裁分歧 |
+
+完整接口文档在运行后的 `/docs`。
+
+## 验证
+
+```bash
+pytest -q
 ```
 
-运行测试：
+自动化测试覆盖导入幂等、表头映射、脱敏、主辅标签、完全/相似去重、快照原子切换、DuckDB校验、地图聚合、回复质量、查询计划继承、会话清理、权限密码、报告事实锁定、Word/PDF导出和政策链接内网防护。
 
-```powershell
-pytest
-```
+1200万条全量性能验收必须在目标云服务器上执行。目标为地图常用筛选P95不超过1.5秒、已生成报告P95不超过2秒、对话首字P95不超过5秒、常见问答完成P95不超过30秒。代码结构已按预聚合和不可变快照设计，但不能用苏州样本代替全量压测结论。
 
-## RAG 问答流程
+## 当前仓库数据盘点
 
-智能问答现在采用“统计摘要 + 检索证据 + 模型生成”的流程：
+截至 2026-07-30，本地 `data/地方政府留言板块爬虫数据汇总` 实际盘点到：
 
-1. 系统根据用户问题、城市和时间条件筛选数据。
-2. 使用 SQLite FTS5 从脱敏后的标题、来件内容、回复内容、部门和主题中召回关键词候选。
-3. 若已构建 embedding 索引，使用 DashScope 从同一批 chunk 中召回语义候选。
-4. 融合关键词排序和语义相似度，选择多样化代表案例，避免全部来自同一主题或同一部门。
-5. 将统计摘要和代表案例交给 DeepSeek 生成回答。
-6. 页面下方展示关键词候选数、语义候选数、高相关数、送入模型的案例数和来源摘要。
+- 405个 XLSX 文件；
+- 约1,976,196行、1,040,539,216字节（约992 MiB）；
+- 187种表头结构；
+- 8个文件缺失时间或正文等最低必需字段；
+- 未发现仍带 `.downloading` 标记的文件。
 
-未配置 DeepSeek 时，系统仍会显示统计摘要和检索到的代表案例。当前第一版 RAG 使用 SQLite FTS5 与短词回退检索，暂未引入向量数据库；后续可以新增 embedding 表和混合排序。
+详细清单保存在本地忽略目录 `instance/source-inventory.json`。这批数据明显少于规划口径的约1200万条、5GB、600个来源，因此当前只能证明架构和小规模集成链路可运行，不能视为全国全量性能验收。需要确认其余数据是否尚未提供，或原规划数字是否需要修订。
 
-## 生产化注意事项
+## 项目仍需要的研究输入
 
-- 当前网页无登录鉴权，仅适合内网 demo，不应直接暴露到公网。
-- 原始留言保存在本地数据库，生产环境需增加访问权限、审计日志、备份和加密策略。
-- 全国规模应使用 PostgreSQL、后台任务队列和更严格的数据分级/脱敏审查。
-
-## DeepSeek 官方资料
-
-- <https://api-docs.deepseek.com/>
-- <https://api-docs.deepseek.com/quick_start/pricing>
-- <https://api-docs.deepseek.com/guides/json_mode>
-- <https://api-docs.deepseek.com/guides/tool_calls>
-
-## 部署参考
-
-- <https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/>
-- <https://fastapi.tiangolo.com/deployment/https/>
+- 600个来源平台到省、地级市、区县行政码的确认表；
+- 两名标注人和一名仲裁人完成黄金样本；
+- 17个一级类的最终定义及二级标签审核结果；
+- 城乡行政映射覆盖率和可接受阈值；
+- 回复质量五项指标的最终权重；
+- 正式报告模板、Logo、字体和审核发布人；
+- 首批权威政策材料；
+- 模型API、预算和数据使用条款；
+- A100规格、到位时间，以及混合模式或全本地模式的最终选择。
+- 本地405个文件是否就是当前完整数据，还是仍有其余来源待补充；
+- 当前8个结构不可用文件的补采或舍弃决定。

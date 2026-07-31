@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ app_name }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='/favicon.svg') }}">
-    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=20260730-v2">
     {% block head %}{% endblock %}
 </head>
 <body>
@@ -14,26 +14,35 @@
             <span class="brand-mark">RA</span>
             <div>
                 <strong>{{ app_name }}</strong>
-                <small>苏州 Demo / 可扩展多城市</small>
+                <small>全国地级市居民留言研究平台</small>
             </div>
         </div>
         <nav>
-            <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">数据概览</a>
-            <a href="/ask" class="{% if request.url.path == '/ask' %}active{% endif %}">智能问答</a>
-            <a href="/reports" class="{% if request.url.path == '/reports' %}active{% endif %}">报告生成</a>
-            <a href="/data" class="{% if request.url.path == '/data' %}active{% endif %}">数据管理</a>
+            <a href="/" class="{% if request.url.path in ['/', '/map'] %}active{% endif %}">全国地图</a>
+            <a href="/reports" class="{% if request.url.path == '/reports' %}active{% endif %}">季度报告</a>
+            <a href="/ask" class="{% if request.url.path == '/ask' %}active{% endif %}">分析对话</a>
+            <a href="/data" class="{% if request.url.path == '/data' %}active{% endif %}">数据治理</a>
         </nav>
         <div class="topbar-meta">
+            <div class="model-state {% if not taxonomy_trial %}online{% endif %}">
+                {% if taxonomy_trial %}标签试运行{% else %}标签已验收{% endif %}
+            </div>
             <div class="model-state {% if llm_enabled %}online{% endif %}">
-                {% if llm_enabled %}AI 已启用 · {{ model_name }}{% else %}本地统计模式{% endif %}
+                {% if llm_enabled %}模型 · {{ model_name }}{% else %}确定性分析模式{% endif %}
             </div>
-            <div class="model-state {% if embedding_enabled %}online{% endif %}">
-                {% if embedding_enabled %}Embedding · {{ embedding_model }}{% else %}未启用向量检索{% endif %}
-            </div>
+            {% if current_user %}
+            <form method="post" action="/logout" class="logout-form">
+                <span>{{ current_user.username }} · {{ current_user.role }}</span>
+                <button class="link-button" type="submit">退出</button>
+            </form>
+            {% endif %}
             <img class="institute-logo" src="{{ url_for('static', path='/logo.png') }}" alt="中国社会科学院数量经济与技术经济研究所">
         </div>
     </header>
     <main class="page">
+        {% if taxonomy_trial %}
+        <div class="trial-banner">当前标签体系尚未通过双人黄金样本验收，所有主题结论均为试运行结果。</div>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
 </body>
